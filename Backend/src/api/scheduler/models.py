@@ -1,3 +1,6 @@
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, ForeignKey, UniqueConstraint
+from sqlalchemy.sql import func
+
 from core.database import Base
 
 class Scheduler(Base):
