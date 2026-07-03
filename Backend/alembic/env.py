@@ -13,9 +13,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from core.database import Base
 # 니가 만든 models 파일들을 전부 임포트해와야 Alembic이 테이블을 인식한다!
 from api.auth.models import User
-from api.place.models import Place
+from api.place.models import Place, ArchivePhoto, MemoryPlace
 from api.scheduler.models import Scheduler, SchedulerPlace
 from api.guestbook.models import Guestbook
+
 
 
 # this is the Alembic Config object, which provides
