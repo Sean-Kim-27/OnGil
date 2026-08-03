@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 // 1. 방금 만든 home_screen.dart 파일을 가져오기 (import)
-import './screens/home_sceen.dart';
+import './screens/home_screen.dart';
 
 void main() {
   runApp(const MyApp());
