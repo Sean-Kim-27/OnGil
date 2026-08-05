@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'place_select_screen.dart';
 
 class ScheduleListScreen extends StatelessWidget {
   const ScheduleListScreen({super.key});
@@ -82,7 +83,14 @@ class ScheduleListScreen extends StatelessWidget {
                 width: double.infinity,
                 height: 52,
                 child: ElevatedButton(
-                  onPressed: () {},
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const PlaceSelectScreen(),
+                      ),
+                    );
+                  },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFC85A32),
                     elevation: 3,

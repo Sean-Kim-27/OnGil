@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import '../widgets/top_header.dart';
 import '../widgets/main_feature_card.dart';
 import '../widgets/quick_action_cards.dart';
-import 'Ai_schedule_working.dart';
-import 'Schedule_list_screen.dart';
+import 'schedule_list_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -35,7 +34,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // ⭐ 현재 선택된 탭에 맞춰 화면을 띄워줌! (하단 바는 고정 유지)
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
           child: _pages[_selectedIndex],
         ),
       ),

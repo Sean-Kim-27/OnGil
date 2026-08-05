@@ -1,5 +1,6 @@
 import 'dart:async'; // Timer를 사용하기 위해 필요!
 import 'package:flutter/material.dart';
+import 'schedule_detail_screen.dart';
 
 class AiScheduleWorking extends StatefulWidget {
   const AiScheduleWorking({super.key});
@@ -31,6 +32,7 @@ class _AiScheduleWorkingState extends State<AiScheduleWorking> {
           _currentIndex++;
         } else {
           _timer?.cancel(); // 다 돌면 타이머 종료 (나중에 여기서 다음 화면으로 이동!)
+          _redirectToResultScreen();
         }
       });
     });
@@ -100,5 +102,19 @@ class _AiScheduleWorkingState extends State<AiScheduleWorking> {
         ),
       ),
     );
+  }
+
+  void _redirectToResultScreen() {
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+
+      // ⭐ 로딩 끝나면 AI가 완성한 타임라인 상세 화면으로 이동!
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const ScheduleDetailScreen(),
+        ),
+      );
+    });
   }
 }
