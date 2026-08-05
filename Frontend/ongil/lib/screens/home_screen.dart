@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../widgets/top_header.dart';
 import '../widgets/main_feature_card.dart';
 import '../widgets/quick_action_cards.dart';
+import 'Ai_schedule_working.dart';
+import 'Schedule_list_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -11,59 +13,58 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // 현재 선택된 하단 탭 인덱스 (0: 지도, 1: 스케줄, 2: 홈, 3: 방명록, 4: 설정)
-  int _selectedIndex = 2; 
+  int _selectedIndex = 2; // 기본 탭: 홈(2번)
 
-  // 테마 색상 상수로 정의
-  static const Color primaryColor = Color(0xFFC85A32); // 온길 주황색
-  static const Color bgColor = Color(0xFFFAF7F2);      // 크림 배경색
+  // 1. 各 탭에 보여줄 화면 리스트
+  List<Widget> get _pages => [
+        const Center(child: Text('지도 화면')),          // 0번 탭
+        const ScheduleListScreen(),                   // 1번 탭 (⭐ 스케줄 화면!)
+        _buildHomeContent(),                          // 2번 탭 (기존 홈 메인)
+        const Center(child: Text('방명록 화면')),        // 3번 탭
+        const Center(child: Text('설정 화면')),          // 4번 탭
+      ];
+
+  static const Color primaryColor = Color(0xFFC85A32); // 온길 시그니처 테라코타 오렌지
+  static const Color bgColor = Color(0xFFFAF7F2);
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: bgColor,
+      backgroundColor: const Color(0xFFFAF7F2),
       
-      // 1. 메인 컨텐츠 영역 (스크롤 가능하게 SingleChildScrollView로 감쌈)
+      // ⭐ 현재 선택된 탭에 맞춰 화면을 띄워줌! (하단 바는 고정 유지)
       body: SafeArea(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Column(
-              children: const [
-                TopHeader(),             // 1) 상단 로고 & 아이콘
-                SizedBox(height: 20),
-                _GreetingSection(),      // 2) 환영 문구 (아래 분리)
-                SizedBox(height: 24),
-                MainFeatureCard(),       // 3) 메인 추억 카드
-                SizedBox(height: 16),
-                QuickActionCards(),      // 4) 하단 퀵 링크 2개
-                SizedBox(height: 20),
-              ],
-            ),
-          ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: _pages[_selectedIndex],
         ),
       ),
 
-      // 2. 우측 하단 주황색 플러스(+) 플로팅 버튼
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 8.0, right: 8.0),
-        child: FloatingActionButton(
-          onPressed: () {
-            print('플러스 버튼 클릭됨!');
-          },
-          backgroundColor: primaryColor,
-          elevation: 4,
-          shape: const CircleBorder(), // 완전한 동그라미 모양
-          child: const Icon(Icons.add, color: Colors.white, size: 28),
-        ),
-      ),
-
-      // 3. 하단 5개 탭 네비게이션 바
       bottomNavigationBar: _buildBottomNavigationBar(),
     );
   }
 
-  // 하단 네비게이션 바 생성 함수
+  // 기존 홈 화면 내용 (독립 위젯 함수로 정리)
+  Widget _buildHomeContent() {
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          const TopHeader(),
+          const SizedBox(height: 20),
+          const _GreetingSection(),
+          const SizedBox(height: 24),
+          const MainFeatureCard(),
+          const SizedBox(height: 16),
+          
+          // 퀵 액션 카드에서 스케줄 누르면 로딩 띄우기 예시
+          QuickActionCards(),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+
+  // 하단 네비게이션 바 클릭 로직
   Widget _buildBottomNavigationBar() {
     return Container(
       decoration: const BoxDecoration(
@@ -71,9 +72,9 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: BottomNavigationBar(
         currentIndex: _selectedIndex,
-        onTap: (index) {
+        onTap: (index) async {
           setState(() {
-            _selectedIndex = index; // 탭 클릭 시 상태 변경 & 화면 새로고침!
+            _selectedIndex = index;
           });
         },
         type: BottomNavigationBarType.fixed, // 탭 5개 이상일 때 모양 유지
