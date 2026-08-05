@@ -1,7 +1,10 @@
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import httpx
+from google.auth.exceptions import TransportError
+from google.auth.transport.requests import Request as GoogleRequest
+from google.oauth2 import id_token as google_id_token
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -10,8 +13,8 @@ from api.auth.models import User
 from api.auth.schemas import SocialProvider
 from core.config import settings
 
-GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
+GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+KAKAO_INTROSPECTION_URL = "https://kapi.kakao.com/v1/user/access_token_info"
 KAKAO_USERINFO_URL = "https://kapi.kakao.com/v2/user/me"
 
 
@@ -27,79 +30,131 @@ class _UpstreamUnavailableError(RuntimeError):
     pass
 
 
+class _GoogleRequestWithTimeout:
+    def __init__(self) -> None:
+        self._request = GoogleRequest()
+
+    def __call__(
+        self,
+        url: str,
+        method: str = "GET",
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 120,
+        **kwargs: Any,
+    ) -> Any:
+        return self._request(
+            url=url,
+            method=method,
+            body=body,
+            headers=headers,
+            timeout=min(timeout, settings.SOCIAL_PROVIDER_TIMEOUT_SECONDS),
+            **kwargs,
+        )
+
+
 @dataclass(frozen=True)
 class SocialProfile:
     provider: SocialProvider
     social_id: str
-    email: Optional[str] = None
-    nickname: Optional[str] = None
-    profile_image_url: Optional[str] = None
+    email: str | None = None
+    nickname: str | None = None
+    profile_image_url: str | None = None
 
 
 class SocialTokenVerifier:
-    """Resolve an opaque client token by asking the supported providers."""
+    """Verify a token only against the provider explicitly chosen by the client."""
 
-    def __init__(self, client: Optional[httpx.Client] = None) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        google_request: GoogleRequest | _GoogleRequestWithTimeout | None = None,
+    ) -> None:
         self._client = client
+        self._google_request = google_request
 
-    def verify(self, token: str) -> SocialProfile:
+    def verify(self, provider: SocialProvider, token: str) -> SocialProfile:
         if not token.strip():
             raise InvalidSocialTokenError("소셜 로그인 토큰이 비어 있습니다.")
 
-        owns_client = self._client is None
-        client = self._client or httpx.Client(
-            timeout=settings.SOCIAL_PROVIDER_TIMEOUT_SECONDS,
-            follow_redirects=False,
-        )
-        unavailable_count = 0
+        if provider is SocialProvider.GOOGLE:
+            return self._verify_google(token)
 
+        owns_client = self._client is None
+        client = self._client or self._new_http_client()
         try:
-            for verifier in (self._verify_google, self._verify_kakao):
-                try:
-                    profile = verifier(client, token)
-                except (httpx.RequestError, _UpstreamUnavailableError):
-                    unavailable_count += 1
-                    continue
-                if profile is not None:
-                    return profile
+            try:
+                profile = self._verify_kakao(client, token)
+            except (httpx.RequestError, _UpstreamUnavailableError) as exc:
+                raise SocialProviderUnavailableError(
+                    "소셜 로그인 공급자에 연결할 수 없습니다."
+                ) from exc
+            if profile is not None:
+                return profile
         finally:
             if owns_client:
                 client.close()
 
-        if unavailable_count:
-            raise SocialProviderUnavailableError(
-                "소셜 로그인 공급자에 연결할 수 없습니다."
+        raise InvalidSocialTokenError(f"{provider.value}에서 유효하지 않은 토큰입니다.")
+
+    def _verify_google(self, token: str) -> SocialProfile:
+        try:
+            payload = google_id_token.verify_oauth2_token(
+                token,
+                self._google_request or _GoogleRequestWithTimeout(),
+                audience=settings.GOOGLE_CLIENT_ID,
             )
-        raise InvalidSocialTokenError("Google 또는 Kakao에서 유효하지 않은 토큰입니다.")
+        except TransportError as exc:
+            raise SocialProviderUnavailableError(
+                "Google 토큰 검증 서비스를 사용할 수 없습니다."
+            ) from exc
+        except ValueError as exc:
+            raise InvalidSocialTokenError(
+                "Google에서 유효하지 않은 ID token입니다."
+            ) from exc
 
-    def _verify_google(
-        self, client: httpx.Client, token: str
-    ) -> Optional[SocialProfile]:
-        if token.count(".") == 2:
-            response = client.get(GOOGLE_TOKENINFO_URL, params={"id_token": token})
-            payload = self._accepted_payload(response)
-            if payload is not None:
-                expected_audience = settings.GOOGLE_CLIENT_ID
-                if expected_audience and payload.get("aud") != expected_audience:
-                    return None
-                return self._google_profile(payload)
+        if (
+            payload.get("iss") not in GOOGLE_ISSUERS
+            or payload.get("aud") != settings.GOOGLE_CLIENT_ID
+            or not payload.get("sub")
+            or payload.get("exp") is None
+        ):
+            raise InvalidSocialTokenError(
+                "Google ID token의 필수 검증값이 올바르지 않습니다."
+            )
+        profile = self._google_profile(payload)
+        if profile is None:
+            raise InvalidSocialTokenError("Google 사용자 식별자가 없습니다.")
+        return profile
 
-        response = client.get(
-            GOOGLE_USERINFO_URL,
-            headers={"Authorization": f"Bearer {token}"},
+    def _verify_kakao(self, client: httpx.Client, token: str) -> SocialProfile | None:
+        authorization = {"Authorization": f"Bearer {token}"}
+        token_response = client.get(
+            KAKAO_INTROSPECTION_URL,
+            headers=authorization,
         )
-        payload = self._accepted_payload(response)
-        return self._google_profile(payload) if payload is not None else None
+        token_payload = self._accepted_payload(token_response)
+        if token_payload is None:
+            return None
 
-    def _verify_kakao(
-        self, client: httpx.Client, token: str
-    ) -> Optional[SocialProfile]:
+        token_user_id = token_payload.get("id")
+        try:
+            expires_in = int(token_payload.get("expires_in", 0))
+        except (TypeError, ValueError):
+            return None
+        if (
+            token_user_id is None
+            or str(token_payload.get("app_id")) != str(settings.KAKAO_APP_ID)
+            or expires_in <= 0
+        ):
+            return None
+
         response = client.get(
             KAKAO_USERINFO_URL,
-            headers={"Authorization": f"Bearer {token}"},
+            headers=authorization,
         )
         payload = self._accepted_payload(response)
-        if payload is None or payload.get("id") is None:
+        if payload is None or str(payload.get("id")) != str(token_user_id):
             return None
 
         account = payload.get("kakao_account") or {}
@@ -108,7 +163,11 @@ class SocialTokenVerifier:
         return SocialProfile(
             provider=SocialProvider.KAKAO,
             social_id=str(payload["id"]),
-            email=account.get("email"),
+            email=(
+                account.get("email")
+                if account.get("is_email_valid") and account.get("is_email_verified")
+                else None
+            ),
             nickname=profile.get("nickname") or properties.get("nickname"),
             profile_image_url=(
                 profile.get("profile_image_url") or properties.get("profile_image")
@@ -116,7 +175,7 @@ class SocialTokenVerifier:
         )
 
     @staticmethod
-    def _accepted_payload(response: httpx.Response) -> Optional[dict[str, Any]]:
+    def _accepted_payload(response: httpx.Response) -> dict[str, Any] | None:
         if response.status_code in (400, 401, 403):
             return None
         if response.status_code == 429 or response.status_code >= 500:
@@ -130,26 +189,36 @@ class SocialTokenVerifier:
         return payload if isinstance(payload, dict) else None
 
     @staticmethod
-    def _google_profile(payload: dict[str, Any]) -> Optional[SocialProfile]:
+    def _google_profile(payload: dict[str, Any]) -> SocialProfile | None:
         social_id = payload.get("sub")
         if not social_id:
             return None
         return SocialProfile(
             provider=SocialProvider.GOOGLE,
             social_id=str(social_id),
-            email=payload.get("email"),
+            email=payload.get("email") if payload.get("email_verified") else None,
             nickname=payload.get("name"),
             profile_image_url=payload.get("picture"),
+        )
+
+    @staticmethod
+    def _new_http_client() -> httpx.Client:
+        return httpx.Client(
+            timeout=settings.SOCIAL_PROVIDER_TIMEOUT_SECONDS,
+            follow_redirects=False,
         )
 
 
 def login_or_signup(
     db: Session,
+    provider: SocialProvider,
     token: str,
-    verifier: Optional[SocialTokenVerifier] = None,
+    verifier: SocialTokenVerifier | None = None,
 ) -> tuple[User, bool]:
     """Verify a social token, then return or create the matching user."""
-    profile = (verifier or SocialTokenVerifier()).verify(token)
+    profile = (verifier or SocialTokenVerifier()).verify(provider, token)
+    if profile.provider != provider:
+        raise InvalidSocialTokenError("요청한 소셜 로그인 공급자와 토큰이 다릅니다.")
     query = select(User).where(
         User.social_provider == profile.provider.value,
         User.social_id == profile.social_id,

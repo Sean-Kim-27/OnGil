@@ -17,9 +17,9 @@ OnGil 백엔드 팀원들을 위한 개발 가이드입니다.
    ```
 
 2. **환경변수(`.env`) 세팅 🚨**
-   보안을 위해 DB 접속 정보는 깃허브에 올라가지 않습니다. 프로젝트 최상단에 `.env` 파일을 생성하고 아래 내용을 입력해 주세요. (실제 주소는 팀장에게 문의해 주세요.)
-   ```env
-   DATABASE_URL=주소
+   보안을 위해 실제 인증 정보는 깃허브에 올리지 않습니다. `.env.example`을 `.env`로 복사한 뒤 값을 채워 주세요. Google은 Android 클라이언트 ID가 아니라 백엔드의 audience로 사용할 **웹 애플리케이션 클라이언트 ID**를 입력합니다. 운영 환경에서는 `REDIS_URL`, `ALLOWED_HOSTS`, `FORCE_HTTPS=true`, `ENABLE_DOCS=false`도 설정해야 합니다.
+   ```bash
+   cp .env.example .env
    ```
 
 ---
@@ -69,7 +69,27 @@ class NewFeature(Base):
 
 ---
 
-## 3. 📦 프론트엔드 통신용 규격 작성 (`schemas.py`)
+## 3. 🔐 소셜 로그인 및 온길 세션
+
+`POST /api/v1/auth/social-login` 요청에는 공급자와 토큰을 명시합니다. Google은 ID token만, Kakao는 access token만 허용합니다.
+
+```json
+{
+  "provider": "GOOGLE",
+  "token": "provider-token",
+  "device_id": "optional-device-id"
+}
+```
+
+응답의 온길 `access_token`은 API의 `Authorization: Bearer ...` 헤더에 사용하고, `refresh_token`은 앱의 안전한 저장소에 보관합니다. 갱신할 때마다 새 refresh token으로 교체해야 하며 이전 토큰을 재사용하면 해당 토큰 패밀리가 폐기됩니다.
+
+- `POST /api/v1/auth/refresh`: 온길 토큰 갱신
+- `POST /api/v1/auth/logout`: refresh token 패밀리 폐기
+- `GET /api/v1/auth/me`: 온길 access token 검증
+
+---
+
+## 4. 📦 프론트엔드 통신용 규격 작성 (`schemas.py`)
 
 DB 테이블 세팅이 끝났다면, 클라이언트(앱)와 데이터를 안전하게 주고받기 위한 Pydantic DTO(Data Transfer Object)를 작성합니다.
 
