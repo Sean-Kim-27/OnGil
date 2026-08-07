@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     SOCIAL_LOGIN_RATE_WINDOW_SECONDS: int = Field(default=60, ge=10, le=3600)
     MAX_REQUEST_BODY_BYTES: int = Field(default=16384, ge=1024, le=1048576)
 
+    KOR_SERVICE_BASE_URL: str | None = None
+    KOR_RELATE_BASE_URL: str | None = None
+    KOR_DATA_API_KEY: SecretStr | None = None
+    TOUR_API_TIMEOUT_SECONDS: float = Field(default=8.0, gt=0, le=30)
+    TOUR_API_PAGE_SIZE: int = Field(default=100, ge=10, le=1000)
+    TOUR_API_MAX_RESULTS_PER_CATEGORY: int = Field(default=2000, ge=100, le=10000)
+
     REDIS_URL: str | None = None
     ENVIRONMENT: str = "development"
     ALLOWED_HOSTS: str = "localhost,127.0.0.1,testserver"
