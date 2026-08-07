@@ -1,10 +1,12 @@
 from typing import Annotated
 
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+
 from api.place.schemas import NearbyPlacesResponse
 from api.place.service import NearbyPlaceService, PlaceNotFoundError
 from core.config import settings
 from core.dependencies import CurrentUser
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from infra.kakao_local import KakaoLocalClient
 from infra.tour_api import (
     TourApiClient,
     TourApiConfigurationError,
@@ -34,7 +36,18 @@ def get_nearby_place_service() -> NearbyPlaceService:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
-    return NearbyPlaceService(client)
+    kakao_rest_api_key = (
+        settings.KAKAO_REST_API_KEY.get_secret_value().strip()
+        if settings.KAKAO_REST_API_KEY
+        else ""
+    )
+    kakao_anchor_client = None
+    if kakao_rest_api_key:
+        kakao_anchor_client = KakaoLocalClient(
+            rest_api_key=kakao_rest_api_key,
+            timeout_seconds=settings.TOUR_API_TIMEOUT_SECONDS,
+        )
+    return NearbyPlaceService(client, kakao_anchor_client)
 
 
 NearbyPlaceServiceDependency = Annotated[
@@ -46,7 +59,7 @@ NearbyPlaceServiceDependency = Annotated[
 @router.get(
     "/nearby",
     response_model=NearbyPlacesResponse,
-    summary="입력한 장소 주변의 음식점·카페·관광지 조회",
+    summary="입력한 장소 주변의 관광·문화·숙박·음식 장소 통합 조회",
 )
 async def get_nearby_places(
     current_user: CurrentUser,
@@ -57,7 +70,7 @@ async def get_nearby_places(
             min_length=1,
             max_length=100,
             pattern=r".*\S.*",
-            description="기준 장소명",
+            description="기준 장소명(학교·아파트·관광지 등)",
         ),
     ],
     radius_m: Annotated[

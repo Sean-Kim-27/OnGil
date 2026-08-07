@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+from collections import Counter
 from typing import Any, Protocol
 
 from api.place.schemas import (
@@ -11,7 +13,38 @@ from api.place.schemas import (
     PlaceAnchor,
     PlaceCategory,
 )
+from infra.kakao_local import KakaoLocalError
 from infra.tour_api import TourApiError
+
+logger = logging.getLogger(__name__)
+
+
+CONTENT_TYPE_CATEGORIES: dict[int, PlaceCategory] = {
+    12: PlaceCategory.TOURIST_ATTRACTION,
+    14: PlaceCategory.CULTURAL_FACILITY,
+    15: PlaceCategory.FESTIVAL,
+    25: PlaceCategory.TRAVEL_COURSE,
+    28: PlaceCategory.LEISURE_SPORTS,
+    32: PlaceCategory.ACCOMMODATION,
+    38: PlaceCategory.SHOPPING,
+    39: PlaceCategory.RESTAURANT,
+}
+
+ANCHOR_SEARCH_FIELDS = (
+    "title",
+    "addr1",
+    "addr2",
+    "category_name",
+    "category_group_name",
+    "category_group_code",
+    "lclsSystm1",
+    "lclsSystm2",
+    "lclsSystm3",
+    "cat1",
+    "cat2",
+    "cat3",
+    "contenttypeid",
+)
 
 
 class PlaceNotFoundError(RuntimeError):
@@ -27,7 +60,7 @@ class TourApiClientProtocol(Protocol):
         longitude: float,
         latitude: float,
         radius_m: int,
-        content_type_id: int,
+        content_type_id: int | None = None,
     ) -> tuple[list[dict[str, Any]], bool]: ...
 
     async def related(
@@ -40,12 +73,21 @@ class TourApiClientProtocol(Protocol):
     ) -> tuple[list[dict[str, Any]], bool]: ...
 
 
+class AnchorSearchClientProtocol(Protocol):
+    async def search_keyword(self, keyword: str) -> list[dict[str, Any]]: ...
+
+
 class NearbyPlaceService:
-    def __init__(self, client: TourApiClientProtocol) -> None:
+    def __init__(
+        self,
+        client: TourApiClientProtocol,
+        anchor_client: AnchorSearchClientProtocol | None = None,
+    ) -> None:
         self.client = client
+        self.anchor_client = anchor_client
 
     async def search(self, *, query: str, radius_m: int) -> NearbyPlacesResponse:
-        candidates = await self.client.search_keyword(query)
+        candidates = await self._search_anchor_candidates(query)
         anchor_item = _select_anchor(query, candidates)
         if anchor_item is None:
             raise PlaceNotFoundError(f"'{query}'에 해당하는 장소를 찾지 못했습니다.")
@@ -56,58 +98,30 @@ class NearbyPlaceService:
             raise PlaceNotFoundError(f"'{query}'의 좌표를 확인할 수 없습니다.")
 
         related_task = self._related_safely(anchor_item)
-        food_result, tourist_result, related_result = await asyncio.gather(
+        nearby_result, related_result = await asyncio.gather(
             self.client.nearby(
                 longitude=longitude,
                 latitude=latitude,
                 radius_m=radius_m,
-                content_type_id=39,
-            ),
-            self.client.nearby(
-                longitude=longitude,
-                latitude=latitude,
-                radius_m=radius_m,
-                content_type_id=12,
             ),
             related_task,
         )
 
-        food_items, food_truncated = food_result
-        tourist_items, tourist_truncated = tourist_result
+        nearby_items, nearby_truncated = nearby_result
         related_items, _, related_applied = related_result
         related_by_title = _index_related_places(related_items)
 
         places: list[NearbyPlace] = []
         seen_content_ids: set[str] = set()
-        for item in food_items:
-            category = (
-                PlaceCategory.CAFE
-                if str(item.get("lclsSystm2", "")).upper() == "FD05"
-                else PlaceCategory.RESTAURANT
-            )
+        for item in nearby_items:
+            category = _category_for_item(item)
             place = _to_nearby_place(item, category, related_by_title)
             if place is not None and place.content_id not in seen_content_ids:
                 seen_content_ids.add(place.content_id)
                 places.append(place)
 
-        for item in tourist_items:
-            place = _to_nearby_place(
-                item,
-                PlaceCategory.TOURIST_ATTRACTION,
-                related_by_title,
-            )
-            if place is not None and place.content_id not in seen_content_ids:
-                seen_content_ids.add(place.content_id)
-                places.append(place)
-
         places.sort(key=lambda place: (place.distance_m, place.title))
-        restaurants = sum(
-            place.category == PlaceCategory.RESTAURANT for place in places
-        )
-        cafes = sum(place.category == PlaceCategory.CAFE for place in places)
-        tourist_attractions = sum(
-            place.category == PlaceCategory.TOURIST_ATTRACTION for place in places
-        )
+        counts = Counter(place.category for place in places)
 
         return NearbyPlacesResponse(
             query=query,
@@ -121,15 +135,39 @@ class NearbyPlaceService:
                 longitude=longitude,
             ),
             counts=NearbyPlaceCounts(
-                restaurant=restaurants,
-                cafe=cafes,
-                tourist_attraction=tourist_attractions,
+                restaurant=counts[PlaceCategory.RESTAURANT],
+                cafe=counts[PlaceCategory.CAFE],
+                tourist_attraction=counts[PlaceCategory.TOURIST_ATTRACTION],
+                cultural_facility=counts[PlaceCategory.CULTURAL_FACILITY],
+                festival=counts[PlaceCategory.FESTIVAL],
+                travel_course=counts[PlaceCategory.TRAVEL_COURSE],
+                leisure_sports=counts[PlaceCategory.LEISURE_SPORTS],
+                accommodation=counts[PlaceCategory.ACCOMMODATION],
+                shopping=counts[PlaceCategory.SHOPPING],
+                other=counts[PlaceCategory.OTHER],
                 total=len(places),
             ),
             places=places,
-            truncated=food_truncated or tourist_truncated,
+            truncated=nearby_truncated,
             related_enrichment_applied=related_applied,
         )
+
+    async def _search_anchor_candidates(
+        self,
+        query: str,
+    ) -> list[dict[str, Any]]:
+        if self.anchor_client is not None:
+            try:
+                candidates = await self.anchor_client.search_keyword(query)
+            except KakaoLocalError:
+                logger.warning(
+                    "Kakao anchor search failed; falling back to TourAPI",
+                    exc_info=True,
+                )
+                candidates = []
+            if candidates:
+                return candidates
+        return await self.client.search_keyword(query)
 
     async def _related_safely(
         self,
@@ -176,15 +214,64 @@ def _select_anchor(
     if not usable:
         return None
 
+    return max(
+        enumerate(usable),
+        key=lambda indexed: (_anchor_score(query, indexed[1]), -indexed[0]),
+    )[1]
+
+
+def _anchor_score(query: str, candidate: dict[str, Any]) -> int:
     normalized_query = _normalize_title(query)
-    for candidate in usable:
-        if _normalize_title(str(candidate.get("title", ""))) == normalized_query:
-            return candidate
-    for candidate in usable:
-        title = _normalize_title(str(candidate.get("title", "")))
-        if normalized_query in title or title in normalized_query:
-            return candidate
-    return usable[0]
+    title = _normalize_title(str(candidate.get("title", "")))
+    if not normalized_query:
+        return 0
+
+    score = 0
+    if title == normalized_query:
+        score += 10_000
+    elif normalized_query in title:
+        score += 4_000
+    elif title and title in normalized_query:
+        score += 2_000
+
+    searchable_values = [
+        str(candidate.get(field, ""))
+        for field in ANCHOR_SEARCH_FIELDS
+        if candidate.get(field)
+    ]
+    normalized_values = [_normalize_title(value) for value in searchable_values]
+    combined = _normalize_title(" ".join(searchable_values))
+    if any(value == normalized_query for value in normalized_values):
+        score += 1_500
+    elif normalized_query in combined:
+        score += 750
+
+    tokens = _search_tokens(query)
+    matched_tokens = sum(token in combined for token in tokens)
+    score += matched_tokens * 150
+    if tokens and matched_tokens == len(tokens):
+        score += 500
+    return score
+
+
+def _search_tokens(value: str) -> list[str]:
+    return [
+        _normalize_title(token)
+        for token in re.findall(r"[0-9a-zA-Z가-힣]+", value.lower())
+        if _normalize_title(token)
+    ]
+
+
+def _category_for_item(item: dict[str, Any]) -> PlaceCategory:
+    content_type_id = _as_int(item.get("contenttypeid"))
+    middle_classification = str(item.get("lclsSystm2", "")).upper()
+    if content_type_id == 39 and middle_classification == "FD05":
+        return PlaceCategory.CAFE
+    if content_type_id == 28 and middle_classification == "AC05":
+        return PlaceCategory.ACCOMMODATION
+    if content_type_id is None:
+        return PlaceCategory.OTHER
+    return CONTENT_TYPE_CATEGORIES.get(content_type_id, PlaceCategory.OTHER)
 
 
 def _to_nearby_place(
@@ -212,6 +299,7 @@ def _to_nearby_place(
         image_url=_optional_str(item.get("firstimage")),
         thumbnail_url=_optional_str(item.get("firstimage2")),
         telephone=_optional_str(item.get("tel")),
+        content_type_id=_as_int(item.get("contenttypeid")),
         classification_code=_optional_str(item.get("lclsSystm3")),
         related_rank=related_rank if related_rank and related_rank > 0 else None,
         related_category=_first_str(

@@ -7,6 +7,13 @@ class PlaceCategory(str, Enum):
     RESTAURANT = "restaurant"
     CAFE = "cafe"
     TOURIST_ATTRACTION = "tourist_attraction"
+    CULTURAL_FACILITY = "cultural_facility"
+    FESTIVAL = "festival"
+    TRAVEL_COURSE = "travel_course"
+    LEISURE_SPORTS = "leisure_sports"
+    ACCOMMODATION = "accommodation"
+    SHOPPING = "shopping"
+    OTHER = "other"
 
 
 class PlaceAnchor(BaseModel):
@@ -30,16 +37,24 @@ class NearbyPlace(BaseModel):
     image_url: str | None = None
     thumbnail_url: str | None = None
     telephone: str | None = None
+    content_type_id: int | None = None
     classification_code: str | None = None
     related_rank: int | None = Field(default=None, ge=1)
     related_category: str | None = None
 
 
 class NearbyPlaceCounts(BaseModel):
-    restaurant: int = Field(ge=0)
-    cafe: int = Field(ge=0)
-    tourist_attraction: int = Field(ge=0)
-    total: int = Field(ge=0)
+    restaurant: int = Field(default=0, ge=0)
+    cafe: int = Field(default=0, ge=0)
+    tourist_attraction: int = Field(default=0, ge=0)
+    cultural_facility: int = Field(default=0, ge=0)
+    festival: int = Field(default=0, ge=0)
+    travel_course: int = Field(default=0, ge=0)
+    leisure_sports: int = Field(default=0, ge=0)
+    accommodation: int = Field(default=0, ge=0)
+    shopping: int = Field(default=0, ge=0)
+    other: int = Field(default=0, ge=0)
+    total: int = Field(default=0, ge=0)
 
 
 class NearbyPlacesResponse(BaseModel):

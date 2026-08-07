@@ -81,16 +81,17 @@ class TourApiClient:
         longitude: float,
         latitude: float,
         radius_m: int,
-        content_type_id: int,
+        content_type_id: int | None = None,
     ) -> tuple[list[dict[str, Any]], bool]:
         params: dict[str, Any] = {
             "mapX": longitude,
             "mapY": latitude,
             "radius": radius_m,
-            "contentTypeId": content_type_id,
             # S sorts by distance and does not exclude places without images.
             "arrange": "S",
         }
+        if content_type_id is not None:
+            params["contentTypeId"] = content_type_id
         return await self._fetch_all(
             self.service_base_url,
             "locationBasedList2",
