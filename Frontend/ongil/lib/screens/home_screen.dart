@@ -1,4 +1,10 @@
 import 'package:flutter/material.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_dimens.dart';
+import '../theme/app_text_styles.dart';
+import '../widgets/app_card.dart';
+import '../widgets/bottom_nav_bar.dart';
+import '../widgets/memory_photo.dart';
 import '../widgets/top_header.dart';
 import '../widgets/main_feature_card.dart';
 import '../widgets/quick_action_cards.dart';
@@ -11,153 +17,127 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // 현재 선택된 하단 탭 인덱스 (0: 지도, 1: 스케줄, 2: 홈, 3: 방명록, 4: 설정)
-  int _selectedIndex = 2; 
-
-  // 테마 색상 상수로 정의
-  static const Color primaryColor = Color(0xFFC85A32); // 온길 주황색
-  static const Color bgColor = Color(0xFFFAF7F2);      // 크림 배경색
+  int _navIndex = 2; // '홈' 탭이 기본 선택
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: bgColor,
-      
-      // 1. 메인 컨텐츠 영역 (스크롤 가능하게 SingleChildScrollView로 감쌈)
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Column(
-              children: const [
-                TopHeader(),             // 1) 상단 로고 & 아이콘
-                SizedBox(height: 20),
-                _GreetingSection(),      // 2) 환영 문구 (아래 분리)
-                SizedBox(height: 24),
-                MainFeatureCard(),       // 3) 메인 추억 카드
-                SizedBox(height: 16),
-                QuickActionCards(),      // 4) 하단 퀵 링크 2개
-                SizedBox(height: 20),
-              ],
-            ),
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.screenHorizontal,
           ),
-        ),
-      ),
-
-      // 2. 우측 하단 주황색 플러스(+) 플로팅 버튼
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 8.0, right: 8.0),
-        child: FloatingActionButton(
-          onPressed: () {
-            print('플러스 버튼 클릭됨!');
-          },
-          backgroundColor: primaryColor,
-          elevation: 4,
-          shape: const CircleBorder(), // 완전한 동그라미 모양
-          child: const Icon(Icons.add, color: Colors.white, size: 28),
-        ),
-      ),
-
-      // 3. 하단 5개 탭 네비게이션 바
-      bottomNavigationBar: _buildBottomNavigationBar(),
-    );
-  }
-
-  // 하단 네비게이션 바 생성 함수
-  Widget _buildBottomNavigationBar() {
-    return Container(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0xFFEFEBE4), width: 1)),
-      ),
-      child: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (index) {
-          setState(() {
-            _selectedIndex = index; // 탭 클릭 시 상태 변경 & 화면 새로고침!
-          });
-        },
-        type: BottomNavigationBarType.fixed, // 탭 5개 이상일 때 모양 유지
-        backgroundColor: bgColor,
-        selectedItemColor: primaryColor,
-        unselectedItemColor: Colors.grey[500],
-        selectedFontSize: 11,
-        unselectedFontSize: 11,
-        elevation: 0,
-        items: [
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.map_outlined),
-            activeIcon: Icon(Icons.map),
-            label: '지도',
-          ),
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.alt_route_outlined),
-            activeIcon: Icon(Icons.alt_route),
-            label: '스케줄',
-          ),
-          BottomNavigationBarItem(
-            icon: Column(
-              children: [
-                const Icon(Icons.home_outlined),
-                if (_selectedIndex == 2)
-                  Container(
-                    margin: const EdgeInsets.only(top: 2),
-                    width: 4,
-                    height: 4,
-                    decoration: const BoxDecoration(
-                      color: primaryColor,
-                      shape: BoxShape.circle,
+          child: Column(
+            children: [
+              const SizedBox(height: 6),
+              const TopHeader(),
+              const SizedBox(height: AppSpacing.sectionGap),
+              const _GreetingSection(),
+              const SizedBox(height: AppSpacing.sectionGap),
+              const MainFeatureCard(),
+              const SizedBox(height: AppSpacing.cardGap),
+              const QuickActionCards(),
+              const SizedBox(height: AppSpacing.sectionGap),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('최근 기록된 기억', style: AppTextStyles.cardTitle),
+                  Text(
+                    '더보기',
+                    style: AppTextStyles.caption.copyWith(
+                      color: AppColors.accent,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-              ],
-            ),
-            activeIcon: const Icon(Icons.home_filled, color: primaryColor),
-            label: '홈',
+                ],
+              ),
+              const SizedBox(height: 10),
+              const _RecentMemoryTile(
+                title: '탄금대 · 충주',
+                subtitle: '모교 앞 골목',
+                meta: '2주 전 방문',
+              ),
+              const SizedBox(height: AppSpacing.cardGap),
+              const _RecentMemoryTile(
+                title: '1998년 기억',
+                subtitle: '초등학교 앞 문구점 자리',
+                meta: '충주 · 대소원면',
+              ),
+              const SizedBox(height: 100),
+            ],
           ),
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.menu_book_outlined),
-            activeIcon: Icon(Icons.menu_book),
-            label: '방명록',
-          ),
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.settings_outlined),
-            activeIcon: Icon(Icons.settings),
-            label: '설정',
-          ),
-        ],
+        ),
+      ),
+      floatingActionButton: AppFab(
+        onPressed: () {
+          // TODO: 새 추억/일정 추가 플로우 연결 예정
+        },
+      ),
+      bottomNavigationBar: AppBottomNavBar(
+        currentIndex: _navIndex,
+        onTap: (i) => setState(() => _navIndex = i),
       ),
     );
   }
 }
 
-// 환영 문구 영역만 작게 분리한 위젯
+/// 인사말 영역: WELCOME BACK 라벨 + 히어로 타이틀 (신규 시안: 가운데 정렬)
 class _GreetingSection extends StatelessWidget {
   const _GreetingSection();
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        children: const [
-          Text(
-            'WELCOME BACK',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFFC39B6B),
-              letterSpacing: 1.2,
+    return Column(
+      children: [
+        Text(
+          'WELCOME BACK',
+          style: AppTextStyles.caption.copyWith(
+            color: AppColors.brandMuted,
+            letterSpacing: 1.2,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '도현님, 오늘도\n추억 속을 걸어보세요',
+          textAlign: TextAlign.center,
+          style: AppTextStyles.heroGreeting,
+        ),
+      ],
+    );
+  }
+}
+
+class _RecentMemoryTile extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final String meta;
+
+  const _RecentMemoryTile({
+    required this.title,
+    required this.subtitle,
+    required this.meta,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      child: Row(
+        children: [
+          const MemoryPhoto(size: 44),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: AppTextStyles.cardTitle),
+                const SizedBox(height: 2),
+                Text(subtitle, style: AppTextStyles.bodySmall),
+              ],
             ),
           ),
-          SizedBox(height: 8),
-          Text(
-            '도현님, 오늘도\n추억 속을 걸어보세요',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFF2C2825),
-              height: 1.35,
-            ),
-          ),
+          Text(meta, style: AppTextStyles.caption),
         ],
       ),
     );

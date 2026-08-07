@@ -1,23 +1,46 @@
 import 'package:flutter/material.dart';
-// 1. 방금 만든 home_screen.dart 파일을 가져오기 (import)
-import './screens/home_screen.dart';
+import 'package:kakao_flutter_sdk_common/kakao_flutter_sdk_common.dart';
+import 'theme/app_theme.dart';
+import 'screens/login_screen.dart';
+import 'screens/signup_screen.dart';
+import 'screens/home_screen.dart';
+import 'services/auth_service.dart';
+import 'widgets/mobile_frame.dart';
 
-void main() {
-  runApp(const MyApp());
+/// 카카오 디벨로퍼스 "네이티브 키"
+const String kKakaoNativeAppKey = 'ad2a4b2182c29302796381039856a10c';
+
+/// 구글 클라우드 콘솔 "OAuth" 키
+const String? kGoogleServerClientId =
+    '9411341480-2i2l7fr0vengvod9dauk5gvumstsg23t.apps.googleusercontent.com';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  KakaoSdk.init(nativeAppKey: kKakaoNativeAppKey);
+  await AuthService.instance.initializeGoogle(serverClientId: kGoogleServerClientId);
+
+  runApp(const OngilApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class OngilApp extends StatelessWidget {
+  const OngilApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
-      // 우측 상단에 뜨는 'DEBUG' 띠 숨기기
-      debugShowCheckedModeBanner: false,
+    return MaterialApp(
       title: '온길',
-      
-      // 2. 앱이 실행될 때 가장 먼저 보여줄 첫 화면(home)으로 HomeScreen을 지정!
-      home: HomeScreen(),
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.light,
+      initialRoute: '/login',
+      routes: {
+        '/login': (_) => const LoginScreen(),
+        '/signup': (_) => const SignUpScreen(),
+        '/home': (_) => const HomeScreen(),
+      },
+      builder: (context, child) {
+        return ResponsiveMobileFrame(child: child ?? const SizedBox.shrink());
+      },
     );
   }
 }
