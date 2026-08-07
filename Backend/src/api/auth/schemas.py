@@ -1,20 +1,61 @@
-from pydantic import BaseModel, Field
-from typing import Optional
+from enum import Enum
 
-# 1. 프론트에서 백엔드로 쏠 때 (Request)
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
+
+
+class SocialProvider(str, Enum):
+    GOOGLE = "GOOGLE"
+    KAKAO = "KAKAO"
+
+
+class SocialLoginRequest(BaseModel):
+    provider: SocialProvider
+    token: SecretStr = Field(
+        ...,
+        min_length=1,
+        max_length=8192,
+        description="Google ID token 또는 Kakao access token",
+    )
+    device_id: str | None = Field(None, min_length=1, max_length=255)
+
+
 class ProfileUpdateRequest(BaseModel):
-    # 닉네임은 필수값이고 최소 2자, 최대 15자로 컷
     nickname: str = Field(..., min_length=2, max_length=15, description="유저 닉네임")
-    profile_image_url: Optional[str] = Field(None, description="프로필 이미지 URL")
+    profile_image_url: str | None = Field(None, description="프로필 이미지 URL")
 
-# 2. 백엔드에서 프론트로 내려줄 때 (Response)
+
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
-    social_provider: str
-    nickname: Optional[str]
-    profile_image_url: Optional[str]
+    social_provider: SocialProvider
+    email: str | None
+    nickname: str | None
+    profile_image_url: str | None
     status: str
 
-    # SQLAlchemy 모델 객체를 Pydantic으로 자동 변환해주는 개사기 옵션
-    class Config:
-        from_attributes = True
+
+class SocialLoginResponse(BaseModel):
+    provider: SocialProvider
+    is_new_user: bool
+    user: UserResponse
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: SecretStr = Field(..., min_length=32, max_length=512)
+
+
+class RefreshTokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserResponse
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: SecretStr = Field(..., min_length=32, max_length=512)
