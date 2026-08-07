@@ -1,5 +1,4 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:google_sign_in/google_sign_in.dart';
@@ -40,13 +39,20 @@ class AuthService {
 
   final _storage = const FlutterSecureStorage();
 
-  // 백엔드 API 주소 
-  final String _backendUrl = 'https://api.seankim428.site/api/v1/auth/social-login';
+  // 백엔드 API 주소
+  final String _backendUrl =
+      'https://api.seankim428.site/api/v1/auth/social-login';
 
   /// clientId / serverClientId는 구글 클라우드 콘솔에서 만든 OAuth 클라이언트
-  Future<void> initializeGoogle({String? clientId, String? serverClientId}) async {
+  Future<void> initializeGoogle({
+    String? clientId,
+    String? serverClientId,
+  }) async {
     if (_googleInitialized) return;
-    await _google.initialize(clientId: clientId, serverClientId: serverClientId);
+    await _google.initialize(
+      clientId: clientId,
+      serverClientId: serverClientId,
+    );
     _googleInitialized = true;
   }
 
@@ -55,43 +61,27 @@ class AuthService {
       throw AuthException('이 플랫폼에서는 구글 로그인 버튼을 직접 지원하지 않아요.');
     }
 
-    final Completer<GoogleSignInAccount?> completer = Completer<GoogleSignInAccount?>();
-    late final StreamSubscription<GoogleSignInAuthenticationEvent> sub;
-    sub = _google.authenticationEvents.listen(
-      (GoogleSignInAuthenticationEvent event) {
-        final GoogleSignInAccount? user = switch (event) {
-          GoogleSignInAuthenticationEventSignIn() => event.user,
-          GoogleSignInAuthenticationEventSignOut() => null,
-        };
-        if (!completer.isCompleted) completer.complete(user);
-        sub.cancel();
-      },
-      onError: (Object e) {
-        if (!completer.isCompleted) completer.completeError(e);
-        sub.cancel();
-      },
-    );
-
+    late final GoogleSignInAccount account;
     try {
-      await _google.authenticate();
+      account = await _google.authenticate();
     } on GoogleSignInException catch (e) {
-      await sub.cancel();
       if (e.code == GoogleSignInExceptionCode.canceled) {
-        throw AuthException('로그인을 취소했어요.', isUserCancel: true);
+        throw AuthException(
+          '구글 로그인을 완료하지 못했습니다. 계정 선택을 취소했거나 '
+          'Android OAuth의 패키지명/SHA-1 설정이 일치하지 않습니다.',
+        );
       }
-      throw AuthException('구글 로그인에 실패했어요. (${e.code})');
-    }
-
-    final GoogleSignInAccount? account = await completer.future.timeout(
-      const Duration(seconds: 30),
-      onTimeout: () => null,
-    );
-    if (account == null) {
-      throw AuthException('구글 로그인에 실패했어요.');
+      if (e.code == GoogleSignInExceptionCode.clientConfigurationError ||
+          e.code == GoogleSignInExceptionCode.providerConfigurationError) {
+        throw AuthException(
+          '구글 로그인 설정을 확인해주세요. (${e.description ?? e.code.name})',
+        );
+      }
+      throw AuthException('구글 로그인에 실패했습니다. (${e.description ?? e.code.name})');
     }
 
     // Google은 ID token 전송
-    final GoogleSignInAuthentication auth = await account.authentication;
+    final GoogleSignInAuthentication auth = account.authentication;
     final String? idToken = auth.idToken;
 
     if (idToken == null) {
@@ -146,15 +136,15 @@ class AuthService {
   }
 
   // 백엔드로 토큰을 보내 온길 자체 토큰을 받고, 시큐어 스토리지에 저장
-  Future<void> _sendTokenToBackend({required String provider, required String token}) async {
+  Future<void> _sendTokenToBackend({
+    required String provider,
+    required String token,
+  }) async {
     try {
       final response = await http.post(
         Uri.parse(_backendUrl),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'provider': provider,
-          'token': token,
-        }),
+        body: jsonEncode({'provider': provider, 'token': token}),
       );
 
       if (response.statusCode == 200 || response.statusCode == 201) {
@@ -168,7 +158,9 @@ class AuthService {
         await _storage.write(key: 'accessToken', value: onGilAccessToken);
         await _storage.write(key: 'refreshToken', value: onGilRefreshToken);
       } else {
-        throw AuthException('온길 서버 연동에 실패했습니다. (Error: ${response.statusCode})');
+        throw AuthException(
+          '온길 서버 연동에 실패했습니다. (Error: ${response.statusCode})',
+        );
       }
     } catch (e) {
       throw AuthException('서버와의 통신에 실패했습니다. 인터넷 연결을 확인해주세요.');
