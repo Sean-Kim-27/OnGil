@@ -36,7 +36,7 @@ class AuthSessionTests(unittest.TestCase):
         )
         self.db = Session(self.engine)
         self.user = User(
-            social_provider="GOOGLE",
+            social_provider="google",
             social_id="google-user-1",
             email="user@example.com",
             status="ACTIVE",

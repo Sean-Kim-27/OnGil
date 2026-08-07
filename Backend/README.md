@@ -75,7 +75,7 @@ class NewFeature(Base):
 
 ```json
 {
-  "provider": "GOOGLE",
+  "provider": "google",
   "token": "provider-token",
   "device_id": "optional-device-id"
 }

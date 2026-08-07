@@ -4,8 +4,8 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
 class SocialProvider(str, Enum):
-    GOOGLE = "GOOGLE"
-    KAKAO = "KAKAO"
+    GOOGLE = "google"
+    KAKAO = "kakao"
 
 
 class SocialLoginRequest(BaseModel):

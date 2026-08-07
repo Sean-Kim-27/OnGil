@@ -8,7 +8,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    social_provider = Column(String(20), nullable=False)  # 'KAKAO' or 'GOOGLE'
+    social_provider = Column(String(20), nullable=False)  # 'kakao' or 'google'
     social_id = Column(String(255), nullable=False)  # 카카오/구글에서 주는 고유 ID 값
     email = Column(String(255), nullable=True)  # 선택 동의 안 할 수도 있으니 Nullable
 

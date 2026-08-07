@@ -38,7 +38,7 @@ class SocialLoginRouterTests(unittest.TestCase):
         login_or_signup_mock.return_value = (
             SimpleNamespace(
                 id=1,
-                social_provider="GOOGLE",
+                social_provider="google",
                 email="user@example.com",
                 nickname="User",
                 profile_image_url=None,
@@ -54,11 +54,11 @@ class SocialLoginRouterTests(unittest.TestCase):
 
         response = self.client.post(
             "/api/v1/auth/social-login",
-            json={"provider": "GOOGLE", "token": "google-token"},
+            json={"provider": "google", "token": "google-token"},
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["provider"], "GOOGLE")
+        self.assertEqual(response.json()["provider"], "google")
         self.assertTrue(response.json()["is_new_user"])
         self.assertEqual(response.json()["access_token"], "ongil-access-token")
         self.assertEqual(response.json()["refresh_token"], "ongil-refresh-token")
@@ -69,7 +69,7 @@ class SocialLoginRouterTests(unittest.TestCase):
 
         response = self.client.post(
             "/api/v1/auth/social-login",
-            json={"provider": "GOOGLE", "token": "invalid-token"},
+            json={"provider": "google", "token": "invalid-token"},
         )
 
         self.assertEqual(response.status_code, 401)
@@ -102,7 +102,7 @@ class SocialLoginRouterTests(unittest.TestCase):
         login_or_signup_mock.return_value = (
             SimpleNamespace(
                 id=1,
-                social_provider="GOOGLE",
+                social_provider="google",
                 email=None,
                 nickname=None,
                 profile_image_url=None,
@@ -117,13 +117,13 @@ class SocialLoginRouterTests(unittest.TestCase):
             for _ in range(2):
                 response = self.client.post(
                     "/api/v1/auth/social-login",
-                    json={"provider": "GOOGLE", "token": "token"},
+                    json={"provider": "google", "token": "token"},
                 )
                 self.assertEqual(response.status_code, 200)
 
             response = self.client.post(
                 "/api/v1/auth/social-login",
-                json={"provider": "GOOGLE", "token": "token"},
+                json={"provider": "google", "token": "token"},
             )
         finally:
             settings.SOCIAL_LOGIN_RATE_LIMIT = original_limit
@@ -140,7 +140,7 @@ class SocialLoginRouterTests(unittest.TestCase):
     def test_me_returns_authenticated_user(self) -> None:
         app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
             id=1,
-            social_provider="GOOGLE",
+            social_provider="google",
             email="user@example.com",
             nickname="User",
             profile_image_url=None,

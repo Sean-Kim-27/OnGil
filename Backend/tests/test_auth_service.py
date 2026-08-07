@@ -211,7 +211,7 @@ class LoginOrSignupTests(unittest.TestCase):
         user_count = self.db.scalar(select(func.count()).select_from(User))
         self.assertTrue(is_new_user)
         self.assertEqual(user_count, 1)
-        self.assertEqual(user.social_provider, "GOOGLE")
+        self.assertEqual(user.social_provider, "google")
         self.assertEqual(user.status, "PENDING")
 
     def test_returns_existing_user_without_duplicate_insert(self) -> None:
