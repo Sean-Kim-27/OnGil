@@ -87,6 +87,26 @@ class NewFeature(Base):
 - `POST /api/v1/auth/logout`: refresh token 패밀리 폐기
 - `GET /api/v1/auth/me`: 온길 access token 검증
 
+### 장소 주변 추천 데이터 조회
+
+국문관광정보서비스 환경변수를 설정하면 로그인한 사용자가 기준 장소 주변
+3~5km의 음식점, 카페, 관광지를 거리순으로 조회할 수 있습니다.
+
+```dotenv
+KOR_SERVICE_BASE_URL=https://apis.data.go.kr/B551011/KorService2
+KOR_RELATE_BASE_URL=https://apis.data.go.kr/B551011/TarRlteTarService1
+KOR_DATA_API_KEY=발급받은_인증키
+```
+
+```http
+GET /api/v1/places/nearby?query=경복궁&radius_m=5000
+Authorization: Bearer <OnGil access token>
+```
+
+응답의 `category`는 `restaurant`, `cafe`, `tourist_attraction` 중 하나이며,
+카페는 TourAPI 분류체계의 `FD05`를 기준으로 음식점과 분리합니다. 연관관광지
+정보를 가져올 수 있으면 `related_rank`와 `related_category`가 함께 제공됩니다.
+
 ---
 
 ## 4. 📦 프론트엔드 통신용 규격 작성 (`schemas.py`)
