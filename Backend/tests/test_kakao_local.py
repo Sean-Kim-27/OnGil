@@ -52,6 +52,49 @@ class KakaoLocalClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0]["addr1"], "충북 충주시 대학로 50")
         self.assertEqual(results[0]["source"], "kakao")
 
+    async def test_searches_by_coordinates_and_distance(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.params["query"], "국립민속박물관")
+            self.assertEqual(request.url.params["x"], "126.979")
+            self.assertEqual(request.url.params["y"], "37.582")
+            self.assertEqual(request.url.params["radius"], "300")
+            self.assertEqual(request.url.params["sort"], "distance")
+            return httpx.Response(
+                200,
+                json={
+                    "documents": [
+                        {
+                            "id": "museum-1",
+                            "place_name": "국립민속박물관",
+                            "x": "126.9791",
+                            "y": "37.5821",
+                            "distance": "18",
+                            "place_url": "http://place.map.kakao.com/museum-1",
+                        }
+                    ]
+                },
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as http_client:
+            client = KakaoLocalClient(rest_api_key="rest-key", client=http_client)
+            results = await client.search_keyword(
+                "국립민속박물관",
+                longitude=126.979,
+                latitude=37.582,
+                radius_m=300,
+                sort="distance",
+            )
+
+        self.assertEqual(results[0]["distance_m"], "18")
+
+    async def test_requires_complete_coordinate_search_parameters(self) -> None:
+        client = KakaoLocalClient(rest_api_key="rest-key")
+
+        with self.assertRaises(ValueError):
+            await client.search_keyword("경복궁", longitude=126.9769)
+
     async def test_rejects_malformed_response(self) -> None:
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(

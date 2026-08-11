@@ -65,3 +65,19 @@ class NearbyPlacesResponse(BaseModel):
     places: list[NearbyPlace]
     truncated: bool
     related_enrichment_applied: bool
+
+
+class KakaoPlaceLinkRequest(BaseModel):
+    title: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r".*\S.*",
+        description="nearby 결과의 장소명",
+    )
+    latitude: float = Field(ge=-90, le=90, description="WGS84 위도")
+    longitude: float = Field(ge=-180, le=180, description="WGS84 경도")
+
+
+class KakaoPlaceLinkResponse(BaseModel):
+    kakao_place_id: str
+    place_url: str

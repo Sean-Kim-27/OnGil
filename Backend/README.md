@@ -118,6 +118,30 @@ TourAPI `locationBasedList2`에는 `contentTypeId`를 전달하지 않아 모든
 지역은 주변 조회가 한 번의 원천 API 요청으로 끝나며, 초과하는 경우에만 다음
 페이지를 추가 요청합니다.
 
+nearby 결과의 한 장소를 눌렀을 때는 장소명과 좌표를 카카오 링크 조회 API에
+전달합니다. 백엔드는 해당 좌표 300m 안에서 이름이 일치하는 후보만 선택하며,
+카카오 장소 ID와 HTTPS 상세 페이지 링크를 반환합니다. 이 호출은 `places` 테이블에
+장소를 저장하지 않습니다.
+
+```http
+POST /api/v1/places/kakao-links/resolve
+Authorization: Bearer <OnGil access token>
+Content-Type: application/json
+
+{
+  "title": "국립민속박물관",
+  "latitude": 37.582,
+  "longitude": 126.979
+}
+```
+
+```json
+{
+  "kakao_place_id": "123456789",
+  "place_url": "https://place.map.kakao.com/123456789"
+}
+```
+
 응답의 `category`는 다음 온길 분류 중 하나입니다.
 
 - `restaurant`, `cafe`

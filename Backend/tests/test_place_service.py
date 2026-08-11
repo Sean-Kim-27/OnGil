@@ -7,7 +7,13 @@ os.environ.setdefault("KAKAO_APP_ID", "1234")
 os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-with-32-characters")
 
 from api.place.schemas import PlaceCategory
-from api.place.service import NearbyPlaceService, PlaceNotFoundError, _select_anchor
+from api.place.service import (
+    KakaoPlaceLinkNotFoundError,
+    KakaoPlaceLinkService,
+    NearbyPlaceService,
+    PlaceNotFoundError,
+    _select_anchor,
+)
 from infra.tour_api import TourApiResponseError
 
 
@@ -114,6 +120,107 @@ class FakeTourApiClient:
         )
 
 
+class FakeKakaoPlaceClient:
+    def __init__(self, candidates: list[dict]) -> None:
+        self.candidates = candidates
+        self.calls: list[dict] = []
+
+    async def search_keyword(self, keyword: str, **kwargs) -> list[dict]:
+        self.calls.append({"keyword": keyword, **kwargs})
+        return self.candidates
+
+
+class KakaoPlaceLinkServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_closest_trustworthy_kakao_place_link(self) -> None:
+        client = FakeKakaoPlaceClient(
+            [
+                {
+                    "contentid": "far",
+                    "title": "국립민속박물관",
+                    "distance_m": "190",
+                    "place_url": "https://place.map.kakao.com/far",
+                },
+                {
+                    "contentid": "near",
+                    "title": "국립민속박물관",
+                    "distance_m": "18",
+                    "place_url": "http://place.map.kakao.com/near",
+                },
+                {
+                    "contentid": "wrong",
+                    "title": "대한민국역사박물관",
+                    "distance_m": "4",
+                    "place_url": "https://place.map.kakao.com/wrong",
+                },
+            ]
+        )
+
+        result = await KakaoPlaceLinkService(client).resolve(
+            title="국립민속박물관",
+            latitude=37.582,
+            longitude=126.979,
+        )
+
+        self.assertEqual(result.kakao_place_id, "near")
+        self.assertEqual(result.place_url, "https://place.map.kakao.com/near")
+        self.assertEqual(
+            client.calls,
+            [
+                {
+                    "keyword": "국립민속박물관",
+                    "longitude": 126.979,
+                    "latitude": 37.582,
+                    "radius_m": 300,
+                    "sort": "distance",
+                }
+            ],
+        )
+
+    async def test_rejects_distant_or_dissimilar_candidates(self) -> None:
+        client = FakeKakaoPlaceClient(
+            [
+                {
+                    "contentid": "distant",
+                    "title": "국립민속박물관",
+                    "distance_m": "301",
+                    "place_url": "https://place.map.kakao.com/distant",
+                },
+                {
+                    "contentid": "wrong",
+                    "title": "대한민국역사박물관",
+                    "distance_m": "10",
+                    "place_url": "https://place.map.kakao.com/wrong",
+                },
+            ]
+        )
+
+        with self.assertRaises(KakaoPlaceLinkNotFoundError):
+            await KakaoPlaceLinkService(client).resolve(
+                title="국립민속박물관",
+                latitude=37.582,
+                longitude=126.979,
+            )
+
+    async def test_rejects_non_kakao_landing_url(self) -> None:
+        client = FakeKakaoPlaceClient(
+            [
+                {
+                    "contentid": "museum",
+                    "title": "국립민속박물관",
+                    "distance_m": "10",
+                    "place_url": "https://example.com/phishing",
+                }
+            ]
+        )
+
+        with self.assertRaises(KakaoPlaceLinkNotFoundError):
+            await KakaoPlaceLinkService(client).resolve(
+                title="국립민속박물관",
+                latitude=37.582,
+                longitude=126.979,
+            )
+
+
 class NearbyPlaceServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_classifies_sorts_and_enriches_nearby_places(self) -> None:
         client = FakeTourApiClient()
@@ -138,9 +245,9 @@ class NearbyPlaceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.truncated)
 
     async def test_keeps_nearby_results_when_optional_relation_api_fails(self) -> None:
-        result = await NearbyPlaceService(
-            FakeTourApiClient(related_error=True)
-        ).search(query="경복궁", radius_m=3000)
+        result = await NearbyPlaceService(FakeTourApiClient(related_error=True)).search(
+            query="경복궁", radius_m=3000
+        )
 
         self.assertEqual(result.counts.total, 6)
         self.assertFalse(result.related_enrichment_applied)

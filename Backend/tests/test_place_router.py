@@ -9,8 +9,11 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-with-32-characters
 os.environ["ENVIRONMENT"] = "test"
 os.environ["REDIS_URL"] = ""
 
-from api.place.router import get_nearby_place_service
+from fastapi.testclient import TestClient
+
+from api.place.router import get_kakao_place_link_service, get_nearby_place_service
 from api.place.schemas import (
+    KakaoPlaceLinkResponse,
     NearbyPlace,
     NearbyPlaceCounts,
     NearbyPlacesResponse,
@@ -18,7 +21,6 @@ from api.place.schemas import (
     PlaceCategory,
 )
 from core.dependencies import get_current_user
-from fastapi.testclient import TestClient
 from main import app
 
 
@@ -52,11 +54,28 @@ class FakeNearbyPlaceService:
         )
 
 
+class FakeKakaoPlaceLinkService:
+    async def resolve(
+        self,
+        *,
+        title: str,
+        latitude: float,
+        longitude: float,
+    ) -> KakaoPlaceLinkResponse:
+        return KakaoPlaceLinkResponse(
+            kakao_place_id="museum-1",
+            place_url="https://place.map.kakao.com/museum-1",
+        )
+
+
 class NearbyPlaceRouterTests(unittest.TestCase):
     def setUp(self) -> None:
         app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1)
-        app.dependency_overrides[get_nearby_place_service] = (
-            lambda: FakeNearbyPlaceService()
+        app.dependency_overrides[get_nearby_place_service] = lambda: (
+            FakeNearbyPlaceService()
+        )
+        app.dependency_overrides[get_kakao_place_link_service] = lambda: (
+            FakeKakaoPlaceLinkService()
         )
         self.client = TestClient(app)
 
@@ -64,6 +83,7 @@ class NearbyPlaceRouterTests(unittest.TestCase):
         self.client.close()
         app.dependency_overrides.pop(get_current_user, None)
         app.dependency_overrides.pop(get_nearby_place_service, None)
+        app.dependency_overrides.pop(get_kakao_place_link_service, None)
 
     def test_returns_nearby_places(self) -> None:
         response = self.client.get(
@@ -103,6 +123,53 @@ class NearbyPlaceRouterTests(unittest.TestCase):
             "/api/v1/places/nearby",
             params={"query": "   "},
         )
+        self.assertEqual(response.status_code, 422)
+
+    def test_resolves_kakao_place_link(self) -> None:
+        response = self.client.post(
+            "/api/v1/places/kakao-links/resolve",
+            json={
+                "title": "국립민속박물관",
+                "latitude": 37.582,
+                "longitude": 126.979,
+            },
+            headers={"Authorization": "Bearer ongil-access-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["kakao_place_id"], "museum-1")
+        self.assertEqual(
+            response.json()["place_url"],
+            "https://place.map.kakao.com/museum-1",
+        )
+
+    def test_kakao_place_link_requires_ongil_access_token(self) -> None:
+        app.dependency_overrides.pop(get_current_user, None)
+        try:
+            response = self.client.post(
+                "/api/v1/places/kakao-links/resolve",
+                json={
+                    "title": "국립민속박물관",
+                    "latitude": 37.582,
+                    "longitude": 126.979,
+                },
+            )
+        finally:
+            app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.headers["WWW-Authenticate"], "Bearer")
+
+    def test_rejects_invalid_kakao_link_coordinates(self) -> None:
+        response = self.client.post(
+            "/api/v1/places/kakao-links/resolve",
+            json={
+                "title": "국립민속박물관",
+                "latitude": 91,
+                "longitude": 126.979,
+            },
+        )
+
         self.assertEqual(response.status_code, 422)
 
 

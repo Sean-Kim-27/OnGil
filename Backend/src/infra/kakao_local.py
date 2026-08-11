@@ -25,9 +25,33 @@ class KakaoLocalClient:
         self.timeout_seconds = timeout_seconds
         self.client = client
 
-    async def search_keyword(self, keyword: str) -> list[dict[str, Any]]:
+    async def search_keyword(
+        self,
+        keyword: str,
+        *,
+        longitude: float | None = None,
+        latitude: float | None = None,
+        radius_m: int | None = None,
+        sort: str = "accuracy",
+    ) -> list[dict[str, Any]]:
         headers = {"Authorization": f"KakaoAK {self.rest_api_key}"}
-        params = {"query": keyword, "size": 15, "sort": "accuracy"}
+        params: dict[str, str | int | float] = {
+            "query": keyword,
+            "size": 15,
+            "sort": sort,
+        }
+        if longitude is not None or latitude is not None or radius_m is not None:
+            if longitude is None or latitude is None or radius_m is None:
+                raise ValueError(
+                    "longitude, latitude, radius_m은 함께 지정해야 합니다."
+                )
+            params.update(
+                {
+                    "x": longitude,
+                    "y": latitude,
+                    "radius": radius_m,
+                }
+            )
 
         try:
             if self.client is not None:
@@ -73,8 +97,7 @@ class KakaoLocalClient:
         return {
             "contentid": document.get("id"),
             "title": document.get("place_name"),
-            "addr1": document.get("road_address_name")
-            or document.get("address_name"),
+            "addr1": document.get("road_address_name") or document.get("address_name"),
             "addr2": document.get("address_name"),
             "mapx": document.get("x"),
             "mapy": document.get("y"),
@@ -82,5 +105,6 @@ class KakaoLocalClient:
             "category_group_code": document.get("category_group_code"),
             "category_group_name": document.get("category_group_name"),
             "place_url": document.get("place_url"),
+            "distance_m": document.get("distance"),
             "source": "kakao",
         }

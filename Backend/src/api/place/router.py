@@ -2,11 +2,20 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from api.place.schemas import NearbyPlacesResponse
-from api.place.service import NearbyPlaceService, PlaceNotFoundError
+from api.place.schemas import (
+    KakaoPlaceLinkRequest,
+    KakaoPlaceLinkResponse,
+    NearbyPlacesResponse,
+)
+from api.place.service import (
+    KakaoPlaceLinkNotFoundError,
+    KakaoPlaceLinkService,
+    NearbyPlaceService,
+    PlaceNotFoundError,
+)
 from core.config import settings
 from core.dependencies import CurrentUser
-from infra.kakao_local import KakaoLocalClient
+from infra.kakao_local import KakaoLocalClient, KakaoLocalError
 from infra.tour_api import (
     TourApiClient,
     TourApiConfigurationError,
@@ -56,6 +65,31 @@ NearbyPlaceServiceDependency = Annotated[
 ]
 
 
+def get_kakao_place_link_service() -> KakaoPlaceLinkService:
+    kakao_rest_api_key = (
+        settings.KAKAO_REST_API_KEY.get_secret_value().strip()
+        if settings.KAKAO_REST_API_KEY
+        else ""
+    )
+    if not kakao_rest_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="카카오 장소 검색 API가 구성되지 않았습니다.",
+        )
+    return KakaoPlaceLinkService(
+        KakaoLocalClient(
+            rest_api_key=kakao_rest_api_key,
+            timeout_seconds=settings.TOUR_API_TIMEOUT_SECONDS,
+        )
+    )
+
+
+KakaoPlaceLinkServiceDependency = Annotated[
+    KakaoPlaceLinkService,
+    Depends(get_kakao_place_link_service),
+]
+
+
 @router.get(
     "/nearby",
     response_model=NearbyPlacesResponse,
@@ -92,6 +126,35 @@ async def get_nearby_places(
             detail=str(exc),
         ) from exc
     except TourApiResponseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/kakao-links/resolve",
+    response_model=KakaoPlaceLinkResponse,
+    summary="선택한 장소의 카카오맵 상세 페이지 링크 조회",
+)
+async def resolve_kakao_place_link(
+    request: KakaoPlaceLinkRequest,
+    current_user: CurrentUser,
+    service: KakaoPlaceLinkServiceDependency,
+) -> KakaoPlaceLinkResponse:
+    del current_user  # Authentication is required to protect the Kakao API quota.
+    try:
+        return await service.resolve(
+            title=request.title.strip(),
+            latitude=request.latitude,
+            longitude=request.longitude,
+        )
+    except KakaoPlaceLinkNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except KakaoLocalError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),

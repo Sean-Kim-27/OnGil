@@ -4,9 +4,12 @@ import asyncio
 import logging
 import re
 from collections import Counter
+from difflib import SequenceMatcher
 from typing import Any, Protocol
+from urllib.parse import urlparse, urlunparse
 
 from api.place.schemas import (
+    KakaoPlaceLinkResponse,
     NearbyPlace,
     NearbyPlaceCounts,
     NearbyPlacesResponse,
@@ -51,6 +54,10 @@ class PlaceNotFoundError(RuntimeError):
     """Raised when a keyword cannot be resolved to a place with coordinates."""
 
 
+class KakaoPlaceLinkNotFoundError(RuntimeError):
+    """Raised when Kakao has no trustworthy match for a TourAPI place."""
+
+
 class TourApiClientProtocol(Protocol):
     async def search_keyword(self, keyword: str) -> list[dict[str, Any]]: ...
 
@@ -75,6 +82,86 @@ class TourApiClientProtocol(Protocol):
 
 class AnchorSearchClientProtocol(Protocol):
     async def search_keyword(self, keyword: str) -> list[dict[str, Any]]: ...
+
+
+class KakaoPlaceSearchClientProtocol(Protocol):
+    async def search_keyword(
+        self,
+        keyword: str,
+        *,
+        longitude: float | None = None,
+        latitude: float | None = None,
+        radius_m: int | None = None,
+        sort: str = "accuracy",
+    ) -> list[dict[str, Any]]: ...
+
+
+class KakaoPlaceLinkService:
+    """Resolve one selected TourAPI place to a Kakao place landing URL."""
+
+    SEARCH_RADIUS_M = 300
+    MIN_TITLE_SIMILARITY = 0.75
+
+    def __init__(self, client: KakaoPlaceSearchClientProtocol) -> None:
+        self.client = client
+
+    async def resolve(
+        self,
+        *,
+        title: str,
+        latitude: float,
+        longitude: float,
+    ) -> KakaoPlaceLinkResponse:
+        candidates = await self.client.search_keyword(
+            title,
+            longitude=longitude,
+            latitude=latitude,
+            radius_m=self.SEARCH_RADIUS_M,
+            sort="distance",
+        )
+        match = self._select_match(title, candidates)
+        if match is None:
+            raise KakaoPlaceLinkNotFoundError(
+                f"'{title}'에 일치하는 카카오 장소 상세 페이지를 찾지 못했습니다."
+            )
+
+        kakao_place_id = _optional_str(match.get("contentid"))
+        place_url = _safe_kakao_place_url(match.get("place_url"))
+        if kakao_place_id is None or place_url is None:
+            raise KakaoPlaceLinkNotFoundError(
+                f"'{title}'의 카카오 장소 상세 페이지를 확인할 수 없습니다."
+            )
+        return KakaoPlaceLinkResponse(
+            kakao_place_id=kakao_place_id,
+            place_url=place_url,
+        )
+
+    def _select_match(
+        self,
+        title: str,
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        scored: list[tuple[float, float, dict[str, Any]]] = []
+        for candidate in candidates:
+            candidate_title = _optional_str(candidate.get("title"))
+            distance_m = _as_float(candidate.get("distance_m"))
+            if (
+                candidate_title is None
+                or distance_m is None
+                or distance_m < 0
+                or distance_m > self.SEARCH_RADIUS_M
+                or _optional_str(candidate.get("contentid")) is None
+                or _safe_kakao_place_url(candidate.get("place_url")) is None
+            ):
+                continue
+
+            similarity = _title_similarity(title, candidate_title)
+            if similarity >= self.MIN_TITLE_SIMILARITY:
+                scored.append((similarity, -distance_m, candidate))
+
+        if not scored:
+            return None
+        return max(scored, key=lambda item: (item[0], item[1]))[2]
 
 
 class NearbyPlaceService:
@@ -332,6 +419,33 @@ def _index_related_places(
 
 def _normalize_title(value: str) -> str:
     return re.sub(r"[^0-9a-z가-힣]", "", value.lower())
+
+
+def _title_similarity(left: str, right: str) -> float:
+    normalized_left = _normalize_title(left)
+    normalized_right = _normalize_title(right)
+    if not normalized_left or not normalized_right:
+        return 0.0
+    if normalized_left == normalized_right:
+        return 1.0
+    if normalized_left in normalized_right or normalized_right in normalized_left:
+        return min(len(normalized_left), len(normalized_right)) / max(
+            len(normalized_left), len(normalized_right)
+        )
+    return SequenceMatcher(None, normalized_left, normalized_right).ratio()
+
+
+def _safe_kakao_place_url(value: Any) -> str | None:
+    url = _optional_str(value)
+    if url is None:
+        return None
+    parsed = urlparse(url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname != "place.map.kakao.com"
+    ):
+        return None
+    return urlunparse(parsed._replace(scheme="https"))
 
 
 def _first_str(item: dict[str, Any], *keys: str) -> str | None:
