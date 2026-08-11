@@ -20,7 +20,7 @@ router = APIRouter(prefix="/schedulers", tags=["schedulers"])
     "",
     response_model=SchedulerResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="새 일정(스케줄러) 생성",
+    summary="기준 장소와 선택 장소를 포함한 새 일정 일괄 생성",
 )
 def create_scheduler(
     request: SchedulerCreateRequest,
