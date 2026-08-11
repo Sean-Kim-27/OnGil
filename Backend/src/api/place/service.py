@@ -1,21 +1,61 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+from collections import Counter
+from difflib import SequenceMatcher
 from typing import Any, Protocol
+from urllib.parse import urlparse, urlunparse
 
 from api.place.schemas import (
+    KakaoPlaceLinkResponse,
     NearbyPlace,
     NearbyPlaceCounts,
     NearbyPlacesResponse,
     PlaceAnchor,
     PlaceCategory,
 )
+from infra.kakao_local import KakaoLocalError
 from infra.tour_api import TourApiError
+
+logger = logging.getLogger(__name__)
+
+
+CONTENT_TYPE_CATEGORIES: dict[int, PlaceCategory] = {
+    12: PlaceCategory.TOURIST_ATTRACTION,
+    14: PlaceCategory.CULTURAL_FACILITY,
+    15: PlaceCategory.FESTIVAL,
+    25: PlaceCategory.TRAVEL_COURSE,
+    28: PlaceCategory.LEISURE_SPORTS,
+    32: PlaceCategory.ACCOMMODATION,
+    38: PlaceCategory.SHOPPING,
+    39: PlaceCategory.RESTAURANT,
+}
+
+ANCHOR_SEARCH_FIELDS = (
+    "title",
+    "addr1",
+    "addr2",
+    "category_name",
+    "category_group_name",
+    "category_group_code",
+    "lclsSystm1",
+    "lclsSystm2",
+    "lclsSystm3",
+    "cat1",
+    "cat2",
+    "cat3",
+    "contenttypeid",
+)
 
 
 class PlaceNotFoundError(RuntimeError):
     """Raised when a keyword cannot be resolved to a place with coordinates."""
+
+
+class KakaoPlaceLinkNotFoundError(RuntimeError):
+    """Raised when Kakao has no trustworthy match for a TourAPI place."""
 
 
 class TourApiClientProtocol(Protocol):
@@ -27,7 +67,7 @@ class TourApiClientProtocol(Protocol):
         longitude: float,
         latitude: float,
         radius_m: int,
-        content_type_id: int,
+        content_type_id: int | None = None,
     ) -> tuple[list[dict[str, Any]], bool]: ...
 
     async def related(
@@ -40,12 +80,101 @@ class TourApiClientProtocol(Protocol):
     ) -> tuple[list[dict[str, Any]], bool]: ...
 
 
-class NearbyPlaceService:
-    def __init__(self, client: TourApiClientProtocol) -> None:
+class AnchorSearchClientProtocol(Protocol):
+    async def search_keyword(self, keyword: str) -> list[dict[str, Any]]: ...
+
+
+class KakaoPlaceSearchClientProtocol(Protocol):
+    async def search_keyword(
+        self,
+        keyword: str,
+        *,
+        longitude: float | None = None,
+        latitude: float | None = None,
+        radius_m: int | None = None,
+        sort: str = "accuracy",
+    ) -> list[dict[str, Any]]: ...
+
+
+class KakaoPlaceLinkService:
+    """Resolve one selected TourAPI place to a Kakao place landing URL."""
+
+    SEARCH_RADIUS_M = 300
+    MIN_TITLE_SIMILARITY = 0.75
+
+    def __init__(self, client: KakaoPlaceSearchClientProtocol) -> None:
         self.client = client
 
+    async def resolve(
+        self,
+        *,
+        title: str,
+        latitude: float,
+        longitude: float,
+    ) -> KakaoPlaceLinkResponse:
+        candidates = await self.client.search_keyword(
+            title,
+            longitude=longitude,
+            latitude=latitude,
+            radius_m=self.SEARCH_RADIUS_M,
+            sort="distance",
+        )
+        match = self._select_match(title, candidates)
+        if match is None:
+            raise KakaoPlaceLinkNotFoundError(
+                f"'{title}'에 일치하는 카카오 장소 상세 페이지를 찾지 못했습니다."
+            )
+
+        kakao_place_id = _optional_str(match.get("contentid"))
+        place_url = _safe_kakao_place_url(match.get("place_url"))
+        if kakao_place_id is None or place_url is None:
+            raise KakaoPlaceLinkNotFoundError(
+                f"'{title}'의 카카오 장소 상세 페이지를 확인할 수 없습니다."
+            )
+        return KakaoPlaceLinkResponse(
+            kakao_place_id=kakao_place_id,
+            place_url=place_url,
+        )
+
+    def _select_match(
+        self,
+        title: str,
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        scored: list[tuple[float, float, dict[str, Any]]] = []
+        for candidate in candidates:
+            candidate_title = _optional_str(candidate.get("title"))
+            distance_m = _as_float(candidate.get("distance_m"))
+            if (
+                candidate_title is None
+                or distance_m is None
+                or distance_m < 0
+                or distance_m > self.SEARCH_RADIUS_M
+                or _optional_str(candidate.get("contentid")) is None
+                or _safe_kakao_place_url(candidate.get("place_url")) is None
+            ):
+                continue
+
+            similarity = _title_similarity(title, candidate_title)
+            if similarity >= self.MIN_TITLE_SIMILARITY:
+                scored.append((similarity, -distance_m, candidate))
+
+        if not scored:
+            return None
+        return max(scored, key=lambda item: (item[0], item[1]))[2]
+
+
+class NearbyPlaceService:
+    def __init__(
+        self,
+        client: TourApiClientProtocol,
+        anchor_client: AnchorSearchClientProtocol | None = None,
+    ) -> None:
+        self.client = client
+        self.anchor_client = anchor_client
+
     async def search(self, *, query: str, radius_m: int) -> NearbyPlacesResponse:
-        candidates = await self.client.search_keyword(query)
+        candidates = await self._search_anchor_candidates(query)
         anchor_item = _select_anchor(query, candidates)
         if anchor_item is None:
             raise PlaceNotFoundError(f"'{query}'에 해당하는 장소를 찾지 못했습니다.")
@@ -56,58 +185,30 @@ class NearbyPlaceService:
             raise PlaceNotFoundError(f"'{query}'의 좌표를 확인할 수 없습니다.")
 
         related_task = self._related_safely(anchor_item)
-        food_result, tourist_result, related_result = await asyncio.gather(
+        nearby_result, related_result = await asyncio.gather(
             self.client.nearby(
                 longitude=longitude,
                 latitude=latitude,
                 radius_m=radius_m,
-                content_type_id=39,
-            ),
-            self.client.nearby(
-                longitude=longitude,
-                latitude=latitude,
-                radius_m=radius_m,
-                content_type_id=12,
             ),
             related_task,
         )
 
-        food_items, food_truncated = food_result
-        tourist_items, tourist_truncated = tourist_result
+        nearby_items, nearby_truncated = nearby_result
         related_items, _, related_applied = related_result
         related_by_title = _index_related_places(related_items)
 
         places: list[NearbyPlace] = []
         seen_content_ids: set[str] = set()
-        for item in food_items:
-            category = (
-                PlaceCategory.CAFE
-                if str(item.get("lclsSystm2", "")).upper() == "FD05"
-                else PlaceCategory.RESTAURANT
-            )
+        for item in nearby_items:
+            category = _category_for_item(item)
             place = _to_nearby_place(item, category, related_by_title)
             if place is not None and place.content_id not in seen_content_ids:
                 seen_content_ids.add(place.content_id)
                 places.append(place)
 
-        for item in tourist_items:
-            place = _to_nearby_place(
-                item,
-                PlaceCategory.TOURIST_ATTRACTION,
-                related_by_title,
-            )
-            if place is not None and place.content_id not in seen_content_ids:
-                seen_content_ids.add(place.content_id)
-                places.append(place)
-
         places.sort(key=lambda place: (place.distance_m, place.title))
-        restaurants = sum(
-            place.category == PlaceCategory.RESTAURANT for place in places
-        )
-        cafes = sum(place.category == PlaceCategory.CAFE for place in places)
-        tourist_attractions = sum(
-            place.category == PlaceCategory.TOURIST_ATTRACTION for place in places
-        )
+        counts = Counter(place.category for place in places)
 
         return NearbyPlacesResponse(
             query=query,
@@ -121,15 +222,39 @@ class NearbyPlaceService:
                 longitude=longitude,
             ),
             counts=NearbyPlaceCounts(
-                restaurant=restaurants,
-                cafe=cafes,
-                tourist_attraction=tourist_attractions,
+                restaurant=counts[PlaceCategory.RESTAURANT],
+                cafe=counts[PlaceCategory.CAFE],
+                tourist_attraction=counts[PlaceCategory.TOURIST_ATTRACTION],
+                cultural_facility=counts[PlaceCategory.CULTURAL_FACILITY],
+                festival=counts[PlaceCategory.FESTIVAL],
+                travel_course=counts[PlaceCategory.TRAVEL_COURSE],
+                leisure_sports=counts[PlaceCategory.LEISURE_SPORTS],
+                accommodation=counts[PlaceCategory.ACCOMMODATION],
+                shopping=counts[PlaceCategory.SHOPPING],
+                other=counts[PlaceCategory.OTHER],
                 total=len(places),
             ),
             places=places,
-            truncated=food_truncated or tourist_truncated,
+            truncated=nearby_truncated,
             related_enrichment_applied=related_applied,
         )
+
+    async def _search_anchor_candidates(
+        self,
+        query: str,
+    ) -> list[dict[str, Any]]:
+        if self.anchor_client is not None:
+            try:
+                candidates = await self.anchor_client.search_keyword(query)
+            except KakaoLocalError:
+                logger.warning(
+                    "Kakao anchor search failed; falling back to TourAPI",
+                    exc_info=True,
+                )
+                candidates = []
+            if candidates:
+                return candidates
+        return await self.client.search_keyword(query)
 
     async def _related_safely(
         self,
@@ -176,15 +301,64 @@ def _select_anchor(
     if not usable:
         return None
 
+    return max(
+        enumerate(usable),
+        key=lambda indexed: (_anchor_score(query, indexed[1]), -indexed[0]),
+    )[1]
+
+
+def _anchor_score(query: str, candidate: dict[str, Any]) -> int:
     normalized_query = _normalize_title(query)
-    for candidate in usable:
-        if _normalize_title(str(candidate.get("title", ""))) == normalized_query:
-            return candidate
-    for candidate in usable:
-        title = _normalize_title(str(candidate.get("title", "")))
-        if normalized_query in title or title in normalized_query:
-            return candidate
-    return usable[0]
+    title = _normalize_title(str(candidate.get("title", "")))
+    if not normalized_query:
+        return 0
+
+    score = 0
+    if title == normalized_query:
+        score += 10_000
+    elif normalized_query in title:
+        score += 4_000
+    elif title and title in normalized_query:
+        score += 2_000
+
+    searchable_values = [
+        str(candidate.get(field, ""))
+        for field in ANCHOR_SEARCH_FIELDS
+        if candidate.get(field)
+    ]
+    normalized_values = [_normalize_title(value) for value in searchable_values]
+    combined = _normalize_title(" ".join(searchable_values))
+    if any(value == normalized_query for value in normalized_values):
+        score += 1_500
+    elif normalized_query in combined:
+        score += 750
+
+    tokens = _search_tokens(query)
+    matched_tokens = sum(token in combined for token in tokens)
+    score += matched_tokens * 150
+    if tokens and matched_tokens == len(tokens):
+        score += 500
+    return score
+
+
+def _search_tokens(value: str) -> list[str]:
+    return [
+        _normalize_title(token)
+        for token in re.findall(r"[0-9a-zA-Z가-힣]+", value.lower())
+        if _normalize_title(token)
+    ]
+
+
+def _category_for_item(item: dict[str, Any]) -> PlaceCategory:
+    content_type_id = _as_int(item.get("contenttypeid"))
+    middle_classification = str(item.get("lclsSystm2", "")).upper()
+    if content_type_id == 39 and middle_classification == "FD05":
+        return PlaceCategory.CAFE
+    if content_type_id == 28 and middle_classification == "AC05":
+        return PlaceCategory.ACCOMMODATION
+    if content_type_id is None:
+        return PlaceCategory.OTHER
+    return CONTENT_TYPE_CATEGORIES.get(content_type_id, PlaceCategory.OTHER)
 
 
 def _to_nearby_place(
@@ -212,6 +386,7 @@ def _to_nearby_place(
         image_url=_optional_str(item.get("firstimage")),
         thumbnail_url=_optional_str(item.get("firstimage2")),
         telephone=_optional_str(item.get("tel")),
+        content_type_id=_as_int(item.get("contenttypeid")),
         classification_code=_optional_str(item.get("lclsSystm3")),
         related_rank=related_rank if related_rank and related_rank > 0 else None,
         related_category=_first_str(
@@ -244,6 +419,33 @@ def _index_related_places(
 
 def _normalize_title(value: str) -> str:
     return re.sub(r"[^0-9a-z가-힣]", "", value.lower())
+
+
+def _title_similarity(left: str, right: str) -> float:
+    normalized_left = _normalize_title(left)
+    normalized_right = _normalize_title(right)
+    if not normalized_left or not normalized_right:
+        return 0.0
+    if normalized_left == normalized_right:
+        return 1.0
+    if normalized_left in normalized_right or normalized_right in normalized_left:
+        return min(len(normalized_left), len(normalized_right)) / max(
+            len(normalized_left), len(normalized_right)
+        )
+    return SequenceMatcher(None, normalized_left, normalized_right).ratio()
+
+
+def _safe_kakao_place_url(value: Any) -> str | None:
+    url = _optional_str(value)
+    if url is None:
+        return None
+    parsed = urlparse(url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname != "place.map.kakao.com"
+    ):
+        return None
+    return urlunparse(parsed._replace(scheme="https"))
 
 
 def _first_str(item: dict[str, Any], *keys: str) -> str | None:
