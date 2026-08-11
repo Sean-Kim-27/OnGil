@@ -16,6 +16,11 @@ class PlaceCategory(str, Enum):
     OTHER = "other"
 
 
+class SearchRadiusMeters(int, Enum):
+    THREE_KM = 3000
+    FIVE_KM = 5000
+
+
 class PlaceAnchor(BaseModel):
     content_id: str | None = None
     title: str
@@ -41,6 +46,19 @@ class NearbyPlace(BaseModel):
     classification_code: str | None = None
     related_rank: int | None = Field(default=None, ge=1)
     related_category: str | None = None
+    registered_year: int | None = Field(
+        default=None, description="TourAPI 등록 연도 기준 추정 연식"
+    )
+    distance_score: float = Field(default=0.0, ge=0, le=1)
+    age_score: float = Field(
+        default=0.0, ge=0, le=1, description="음식점/관광지에만 적용. 카페는 항상 0"
+    )
+    total_score: float = Field(
+        default=0.0,
+        ge=0,
+        le=1,
+        description="음식점/관광지=거리+연식 가중합, 카페=거리 점수만",
+    )
 
 
 class NearbyPlaceCounts(BaseModel):
@@ -59,7 +77,7 @@ class NearbyPlaceCounts(BaseModel):
 
 class NearbyPlacesResponse(BaseModel):
     query: str
-    radius_m: int = Field(ge=3000, le=5000)
+    radius_m: SearchRadiusMeters
     anchor: PlaceAnchor
     counts: NearbyPlaceCounts
     places: list[NearbyPlace]

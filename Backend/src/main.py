@@ -1,10 +1,12 @@
-from api.auth.router import router as auth_router
-from api.place.router import router as place_router
-from core.config import settings
-from core.middleware import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
 from fastapi import FastAPI
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
+from api.auth.router import router as auth_router
+from api.place.router import router as place_router
+from api.scheduler.router import router as scheduler_router
+from core.config import settings
+from core.middleware import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
 
 app = FastAPI(
     title="OnGil API",
@@ -22,3 +24,4 @@ if settings.FORCE_HTTPS:
     app.add_middleware(HTTPSRedirectMiddleware)
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(place_router, prefix="/api/v1")
+app.include_router(scheduler_router, prefix="/api/v1")

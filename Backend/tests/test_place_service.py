@@ -239,8 +239,11 @@ class NearbyPlaceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.places[0].category, PlaceCategory.CAFE)
         self.assertEqual(result.places[0].content_type_id, 39)
         self.assertEqual(client.nearby_content_type_ids, [None])
-        self.assertEqual(result.places[1].related_rank, 2)
-        self.assertEqual(result.places[1].related_category, "박물관")
+        related_place = next(
+            place for place in result.places if place.content_id == "tour-1"
+        )
+        self.assertEqual(related_place.related_rank, 2)
+        self.assertEqual(related_place.related_category, "박물관")
         self.assertTrue(result.related_enrichment_applied)
         self.assertTrue(result.truncated)
 

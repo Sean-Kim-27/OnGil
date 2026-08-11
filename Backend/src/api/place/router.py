@@ -6,6 +6,7 @@ from api.place.schemas import (
     KakaoPlaceLinkRequest,
     KakaoPlaceLinkResponse,
     NearbyPlacesResponse,
+    SearchRadiusMeters,
 )
 from api.place.service import (
     KakaoPlaceLinkNotFoundError,
@@ -108,13 +109,13 @@ async def get_nearby_places(
         ),
     ],
     radius_m: Annotated[
-        int,
-        Query(ge=3000, le=5000, description="검색 반경(미터)"),
+        SearchRadiusMeters,
+        Query(description="검색 반경(미터): 3km 또는 5km"),
     ] = 5000,
 ) -> NearbyPlacesResponse:
     del current_user  # Authentication is required to protect the public-data quota.
     try:
-        return await service.search(query=query.strip(), radius_m=radius_m)
+        return await service.search(query=query.strip(), radius_m=int(radius_m))
     except PlaceNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

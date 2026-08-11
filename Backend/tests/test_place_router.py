@@ -109,8 +109,8 @@ class NearbyPlaceRouterTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.headers["WWW-Authenticate"], "Bearer")
 
-    def test_rejects_radius_outside_three_to_five_kilometers(self) -> None:
-        for radius_m in (2999, 5001):
+    def test_rejects_radius_other_than_three_or_five_kilometers(self) -> None:
+        for radius_m in (2999, 3001, 4000, 4999, 5001):
             with self.subTest(radius_m=radius_m):
                 response = self.client.get(
                     "/api/v1/places/nearby",
