@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from api.place.schemas import (
@@ -12,6 +14,14 @@ from api.place.schemas import (
     PlaceCategory,
 )
 from infra.tour_api import TourApiError
+
+# 음식점/관광지(=향수를 자극하는 카테고리)에만 적용하는 거리/연식 가중치.
+# 카페는 "오래됨 = 매력"이 성립하지 않고 대체할 품질 신호(리뷰/별점)도 없어서
+# 거리 점수만 사용한다 (AGE_WEIGHTED_CATEGORIES에 속하지 않음).
+DISTANCE_WEIGHT = 0.3
+AGE_WEIGHT = 0.7
+AGE_SCALE_YEARS = 20  # 연식 점수가 얼마나 빨리 1에 수렴하는지 조절하는 기준선
+AGE_WEIGHTED_CATEGORIES = {PlaceCategory.RESTAURANT, PlaceCategory.TOURIST_ATTRACTION}
 
 
 class PlaceNotFoundError(RuntimeError):
@@ -85,7 +95,7 @@ class NearbyPlaceService:
                 if str(item.get("lclsSystm2", "")).upper() == "FD05"
                 else PlaceCategory.RESTAURANT
             )
-            place = _to_nearby_place(item, category, related_by_title)
+            place = _to_nearby_place(item, category, related_by_title, radius_m)
             if place is not None and place.content_id not in seen_content_ids:
                 seen_content_ids.add(place.content_id)
                 places.append(place)
@@ -95,12 +105,13 @@ class NearbyPlaceService:
                 item,
                 PlaceCategory.TOURIST_ATTRACTION,
                 related_by_title,
+                radius_m,
             )
             if place is not None and place.content_id not in seen_content_ids:
                 seen_content_ids.add(place.content_id)
                 places.append(place)
 
-        places.sort(key=lambda place: (place.distance_m, place.title))
+        places.sort(key=lambda place: (-place.total_score, place.distance_m))
         restaurants = sum(
             place.category == PlaceCategory.RESTAURANT for place in places
         )
@@ -191,12 +202,34 @@ def _to_nearby_place(
     item: dict[str, Any],
     category: PlaceCategory,
     related_by_title: dict[str, dict[str, Any]],
+    radius_m: int,
 ) -> NearbyPlace | None:
     content_id = _optional_str(item.get("contentid"))
     title = _optional_str(item.get("title"))
     distance = _as_float(item.get("dist"))
     if not content_id or not title or distance is None or distance < 0:
         return None
+
+    distance_m = round(distance)
+    distance_score = max(0.0, 1.0 - (distance_m / radius_m))
+
+    registered_year = _registered_year(item.get("createdtime"))
+    if category in AGE_WEIGHTED_CATEGORIES:
+        if registered_year is not None:
+            current_year = datetime.now(timezone.utc).year
+            age_years = max(0, current_year - registered_year)
+            # 오래될수록 계속(아주 조금씩이라도) 점수가 올라가되 1.0을 넘지 않도록
+            # 지수적으로 수렴시킨다 (특정 연차 이후 전부 동점 처리되는 걸 방지).
+            age_score = 1 - math.exp(-age_years / AGE_SCALE_YEARS)
+        else:
+            age_score = 0.0
+        total_score = round(
+            DISTANCE_WEIGHT * distance_score + AGE_WEIGHT * age_score, 4
+        )
+    else:
+        # 카페 등 "오래됨 = 매력"이 성립하지 않는 카테고리는 거리 점수만 사용.
+        age_score = 0.0
+        total_score = round(distance_score, 4)
 
     relation = related_by_title.get(_normalize_title(title), {})
     related_rank = _as_int(relation.get("rlteRank"))
@@ -208,7 +241,7 @@ def _to_nearby_place(
         address_detail=_optional_str(item.get("addr2")),
         latitude=_as_float(item.get("mapy")),
         longitude=_as_float(item.get("mapx")),
-        distance_m=round(distance),
+        distance_m=distance_m,
         image_url=_optional_str(item.get("firstimage")),
         thumbnail_url=_optional_str(item.get("firstimage2")),
         telephone=_optional_str(item.get("tel")),
@@ -220,6 +253,10 @@ def _to_nearby_place(
             "rlteCtgryMclsNm",
             "rlteCtgryLclsNm",
         ),
+        registered_year=registered_year,
+        distance_score=round(distance_score, 4),
+        age_score=round(age_score, 4),
+        total_score=total_score,
     )
 
 
@@ -240,6 +277,16 @@ def _index_related_places(
         ):
             result[key] = item
     return result
+
+
+def _registered_year(value: Any) -> int | None:
+    text = _optional_str(value)
+    if not text or len(text) < 4 or not text[:4].isdigit():
+        return None
+    year = int(text[:4])
+    if year < 1900 or year > datetime.now(timezone.utc).year:
+        return None
+    return year
 
 
 def _normalize_title(value: str) -> str:

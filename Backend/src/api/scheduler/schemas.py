@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from api.place.schemas import PlaceCategory
 from api.scheduler.models import CompanionType, MobilityMode, TimeSlot, TripType
 
 
@@ -27,8 +28,24 @@ class SchedulerCreateRequest(BaseModel):
         return end_datetime
 
 
+class SchedulerPlaceSelection(BaseModel):
+    """/places/nearby 응답에서 사용자가 고른 장소 하나를 그대로 실어 보내는 값.
+
+    scheduler_places.place_id는 우리 DB의 내부 PK를 참조해야 하므로,
+    프론트가 TourAPI content_id를 바로 넣으면 안 됨. 백엔드가 이 값으로
+    Place 테이블을 조회하고, 없으면 새로 만들어서 내부 PK를 얻는다.
+    """
+
+    content_id: str = Field(..., description="TourAPI content_id (api_place_id)")
+    title: str
+    category: PlaceCategory
+    latitude: float
+    longitude: float
+    image_url: str | None = None
+
+
 class SchedulerPlaceCreateRequest(BaseModel):
-    place_id: int
+    place: SchedulerPlaceSelection
     day_no: int = Field(default=1, ge=1, description="몇 일차인지")
     time_slot: TimeSlot | None = None
     visit_order: int = Field(..., ge=1, description="해당 일차의 방문 순서")
@@ -58,27 +75,3 @@ class SchedulerResponse(BaseModel):
     start_datetime: datetime
     end_datetime: datetime
     places: list[SchedulerPlaceResponse] = []
-
-
-class RecommendedPlace(BaseModel):
-    content_id: str
-    title: str
-    category: str
-    address: str | None = None
-    latitude: float | None = None
-    longitude: float | None = None
-    distance_m: int = Field(ge=0)
-    registered_year: int | None = Field(
-        default=None, description="TourAPI 등록 연도 기준 추정 연식"
-    )
-    distance_score: float = Field(ge=0, le=1)
-    age_score: float = Field(ge=0, le=1)
-    total_score: float = Field(ge=0, le=1)
-    image_url: str | None = None
-
-
-class SchedulerRecommendationsResponse(BaseModel):
-    scheduler_id: int
-    anchor_title: str
-    radius_m: int = Field(ge=3000, le=5000)
-    places: list[RecommendedPlace]
