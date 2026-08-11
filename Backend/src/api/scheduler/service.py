@@ -264,8 +264,14 @@ def _update_place(place: Place, values: dict[str, object]) -> None:
 
 
 def _place_update_values(values: dict[str, object]) -> dict[str, object]:
+    nullable_enrichment_fields = {
+        "image_url",
+        "kakao_place_id",
+        "kakao_place_url",
+    }
     return {
         key: value
         for key, value in values.items()
-        if key != "api_place_id" and not (key == "image_url" and value is None)
+        if key != "api_place_id"
+        and not (key in nullable_enrichment_fields and value is None)
     }

@@ -53,19 +53,24 @@ class SchedulerPlaceSelection(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     image_url: str | None = Field(default=None, max_length=500)
-    kakao_place_id: str = Field(
-        ..., min_length=1, max_length=100, description="Kakao Local 장소 ID"
+    kakao_place_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        description="Kakao Local 장소 ID. 링크 확인 실패 시 null",
     )
-    place_url: str = Field(
-        ...,
+    place_url: str | None = Field(
+        default=None,
         min_length=1,
         max_length=500,
-        description="Kakao Local이 반환한 장소 상세 페이지 URL",
+        description="Kakao Local 장소 상세 페이지 URL. 링크 확인 실패 시 null",
     )
 
     @field_validator("place_url")
     @classmethod
-    def _validate_kakao_place_url(cls, value: str) -> str:
+    def _validate_kakao_place_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         parsed = urlparse(value.strip())
         if (
             parsed.scheme not in {"http", "https"}
@@ -73,6 +78,14 @@ class SchedulerPlaceSelection(BaseModel):
         ):
             raise ValueError("place_url은 카카오맵 장소 상세 URL이어야 합니다.")
         return urlunparse(parsed._replace(scheme="https"))
+
+    @model_validator(mode="after")
+    def _validate_kakao_link_pair(self) -> Self:
+        if (self.kakao_place_id is None) != (self.place_url is None):
+            raise ValueError(
+                "kakao_place_id와 place_url은 함께 지정하거나 모두 null이어야 합니다."
+            )
+        return self
 
 
 class SchedulerPlaceCreateRequest(BaseModel):
@@ -99,7 +112,7 @@ class SchedulerCreateRequest(BaseModel):
     places: list[SchedulerPlaceCreateRequest] = Field(
         ...,
         min_length=1,
-        description="nearby에서 선택하고 Kakao URL까지 확인한 장소 목록",
+        description="nearby에서 선택하고 Kakao URL 확인을 시도한 장소 목록",
     )
     companion_type: CompanionType
     companion_count: int = Field(default=1, ge=1, le=20)

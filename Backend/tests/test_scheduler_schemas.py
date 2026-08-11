@@ -108,6 +108,29 @@ class SchedulerDatetimeValidationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_requires_kakao_id_and_url_as_a_pair(self) -> None:
+        place = self.payload["places"][0]["place"]
+        missing_url = {**place, "place_url": None}
+        missing_id = {**place, "kakao_place_id": None}
+
+        missing_url_response = self.client.post(
+            "/schedulers",
+            json={
+                **self.payload,
+                "places": [{"place": missing_url, "visit_order": 1}],
+            },
+        )
+        missing_id_response = self.client.post(
+            "/schedulers",
+            json={
+                **self.payload,
+                "places": [{"place": missing_id, "visit_order": 1}],
+            },
+        )
+
+        self.assertEqual(missing_url_response.status_code, 422)
+        self.assertEqual(missing_id_response.status_code, 422)
+
     def test_requires_exactly_one_memory_place_source(self) -> None:
         without_memory = {**self.payload, "memory_place": None}
         missing_response = self.client.post("/schedulers", json=without_memory)

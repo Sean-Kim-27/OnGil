@@ -142,6 +142,46 @@ class SchedulerCreationFlowTests(unittest.TestCase):
                 "https://place.map.kakao.com/kakao-restaurant-new",
             )
 
+    def test_creates_scheduler_when_kakao_link_is_unavailable(self) -> None:
+        payload = scheduler_payload()
+        selected = payload["places"][0]
+        selected["place"] = {
+            key: value
+            for key, value in selected["place"].items()
+            if key not in {"kakao_place_id", "place_url"}
+        }
+        payload["places"] = [selected]
+
+        response = self.client.post("/api/v1/schedulers", json=payload)
+
+        self.assertEqual(response.status_code, 201)
+        stored_place = response.json()["places"][0]["place"]
+        self.assertIsNone(stored_place["kakao_place_id"])
+        self.assertIsNone(stored_place["place_url"])
+
+    def test_null_kakao_link_does_not_erase_existing_place_link(self) -> None:
+        first = self.client.post("/api/v1/schedulers", json=scheduler_payload())
+        self.assertEqual(first.status_code, 201)
+
+        payload = scheduler_payload()
+        selected = payload["places"][0]
+        selected["place"] = {
+            **selected["place"],
+            "kakao_place_id": None,
+            "place_url": None,
+        }
+        payload["places"] = [selected]
+
+        response = self.client.post("/api/v1/schedulers", json=payload)
+
+        self.assertEqual(response.status_code, 201)
+        stored_place = response.json()["places"][0]["place"]
+        self.assertEqual(stored_place["kakao_place_id"], "kakao-restaurant-1")
+        self.assertEqual(
+            stored_place["place_url"],
+            "https://place.map.kakao.com/kakao-restaurant-1",
+        )
+
     def test_full_read_edit_and_delete_flow(self) -> None:
         created = self.client.post("/api/v1/schedulers", json=scheduler_payload())
         scheduler_id = created.json()["id"]
