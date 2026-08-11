@@ -25,16 +25,28 @@ class FakeTourApiClient:
             }
         ]
 
-    async def nearby(self, *, longitude, latitude, radius_m, content_type_id):
-        if content_type_id == 39:
+    async def nearby(
+        self, *, longitude, latitude, radius_m, content_type_id=None
+    ):
+        if content_type_id in (None, 39):
             return (
                 [
+                    {
+                        "contentid": "anchor",
+                        "title": "경복궁",
+                        "dist": "0",
+                        "mapx": "126.9769",
+                        "mapy": "37.5796",
+                        "contenttypeid": "12",
+                        "createdtime": "20000101120000",
+                    },
                     {
                         "contentid": "old-restaurant",
                         "title": "오래된 냉면집",
                         "dist": "500",
                         "mapx": "126.977",
                         "mapy": "37.580",
+                        "contenttypeid": "39",
                         "lclsSystm2": "FD01",  # 일반 음식점
                         "createdtime": "20030101120000",
                     },
@@ -44,6 +56,7 @@ class FakeTourApiClient:
                         "dist": "300",
                         "mapx": "126.978",
                         "mapy": "37.581",
+                        "contenttypeid": "39",
                         "lclsSystm2": "FD05",  # 카페
                         "createdtime": "20250101120000",
                     },
@@ -53,6 +66,7 @@ class FakeTourApiClient:
                         "dist": "2900",
                         "mapx": "126.99",
                         "mapy": "37.60",
+                        "contenttypeid": "39",
                         "lclsSystm2": "FD05",  # 카페
                         "createdtime": "19900101120000",
                     },
@@ -66,6 +80,13 @@ class FakeTourApiClient:
 
 
 class PlaceScoringTests(unittest.IsolatedAsyncioTestCase):
+    async def test_excludes_search_anchor_from_recommendations(self):
+        service = NearbyPlaceService(FakeTourApiClient())
+        result = await service.search(query="경복궁", radius_m=3000)
+
+        self.assertEqual(result.anchor.content_id, "anchor")
+        self.assertNotIn("anchor", [place.content_id for place in result.places])
+
     async def test_cafe_ignores_age_and_ranks_by_distance_only(self):
         service = NearbyPlaceService(FakeTourApiClient())
         result = await service.search(query="경복궁", radius_m=3000)

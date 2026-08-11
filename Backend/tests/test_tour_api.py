@@ -7,6 +7,7 @@ os.environ.setdefault("KAKAO_APP_ID", "1234")
 os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-with-32-characters")
 
 import httpx
+
 from infra.tour_api import TourApiClient, TourApiResponseError
 
 
@@ -62,6 +63,7 @@ class TourApiClientTests(unittest.IsolatedAsyncioTestCase):
         requested_pages: list[int] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
+            self.assertNotIn("contentTypeId", request.url.params)
             page_no = int(request.url.params["pageNo"])
             requested_pages.append(page_no)
             if page_no == 1:
@@ -93,7 +95,6 @@ class TourApiClientTests(unittest.IsolatedAsyncioTestCase):
                 longitude=126.9,
                 latitude=37.5,
                 radius_m=3000,
-                content_type_id=39,
             )
 
         self.assertEqual(requested_pages, [1, 2])

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from api.place.models import MemoryPlace, Place
@@ -78,18 +81,22 @@ class SchedulerService:
         scheduler_id: int,
         request: SchedulerPlaceCreateRequest,
     ) -> SchedulerPlace:
-        scheduler = self.get_owned(user_id, scheduler_id)
-        place = _get_or_create_place(self.db, request.place)
+        try:
+            scheduler = self.get_owned(user_id, scheduler_id)
+            place = _get_or_create_place(self.db, request.place)
 
-        scheduler_place = SchedulerPlace(
-            scheduler_id=scheduler.id,
-            place_id=place.id,
-            day_no=request.day_no,
-            time_slot=request.time_slot,
-            visit_order=request.visit_order,
-        )
-        self.db.add(scheduler_place)
-        self.db.commit()
+            scheduler_place = SchedulerPlace(
+                scheduler_id=scheduler.id,
+                place_id=place.id,
+                day_no=request.day_no,
+                time_slot=request.time_slot,
+                visit_order=request.visit_order,
+            )
+            self.db.add(scheduler_place)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         self.db.refresh(scheduler_place)
         return scheduler_place
 
@@ -134,15 +141,52 @@ def _get_or_create_place(db: Session, selection: SchedulerPlaceSelection) -> Pla
     if place is not None:
         return place
 
-    place = Place(
-        api_place_id=selection.content_id,
-        name=selection.title,
-        category=selection.category.value,
-        lat=selection.latitude,
-        lng=selection.longitude,
-        image_url=selection.image_url,
-    )
-    db.add(place)
-    db.commit()
-    db.refresh(place)
+    values = {
+        "api_place_id": selection.content_id,
+        "name": selection.title,
+        "category": selection.category.value,
+        "lat": selection.latitude,
+        "lng": selection.longitude,
+        "image_url": selection.image_url,
+    }
+    dialect_name = db.get_bind().dialect.name
+    if dialect_name == "postgresql":
+        statement = postgresql_insert(Place).values(**values)
+        db.execute(
+            statement.on_conflict_do_nothing(index_elements=[Place.api_place_id])
+        )
+    elif dialect_name == "sqlite":
+        statement = sqlite_insert(Place).values(**values)
+        db.execute(
+            statement.on_conflict_do_nothing(index_elements=[Place.api_place_id])
+        )
+    else:
+        return _insert_place_with_savepoint(db, selection, values)
+
+    place = db.scalar(select(Place).where(Place.api_place_id == selection.content_id))
+    if place is None:
+        raise RuntimeError("장소를 저장한 뒤 다시 조회할 수 없습니다.")
+    return place
+
+
+def _insert_place_with_savepoint(
+    db: Session,
+    selection: SchedulerPlaceSelection,
+    values: dict[str, object],
+) -> Place:
+    """Fallback get-or-create for dialects without a native upsert path."""
+    place = Place(**values)
+    try:
+        with db.begin_nested():
+            db.add(place)
+            db.flush()
+    except IntegrityError:
+        # Another request may have inserted the same TourAPI content_id between
+        # the SELECT above and this INSERT. The savepoint keeps the outer
+        # scheduler transaction usable so the winning row can be reused.
+        place = db.scalar(
+            select(Place).where(Place.api_place_id == selection.content_id)
+        )
+        if place is None:
+            raise
     return place

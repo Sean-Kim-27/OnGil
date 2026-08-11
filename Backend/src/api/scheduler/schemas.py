@@ -1,31 +1,36 @@
 from datetime import datetime
+from enum import Enum
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from api.place.schemas import PlaceCategory
 from api.scheduler.models import CompanionType, MobilityMode, TimeSlot, TripType
 
 
+class SearchRadiusKm(int, Enum):
+    THREE_KM = 3
+    FIVE_KM = 5
+
+
 class SchedulerCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=100)
     mobility_mode: MobilityMode
-    search_radius: float = Field(..., gt=0, le=5, description="탐색 반경 (단위: km)")
+    search_radius: SearchRadiusKm = Field(description="탐색 반경: 3km 또는 5km")
     trip_type: TripType
     memory_place_id: int | None = Field(
         default=None, description="중심이 되는 추억의 장소 id"
     )
     companion_type: CompanionType
     companion_count: int = Field(default=1, ge=1, le=20)
-    start_datetime: datetime
-    end_datetime: datetime
+    start_datetime: AwareDatetime
+    end_datetime: AwareDatetime
 
-    @field_validator("end_datetime")
-    @classmethod
-    def _end_after_start(cls, end_datetime: datetime, info):
-        start_datetime = info.data.get("start_datetime")
-        if start_datetime is not None and end_datetime <= start_datetime:
+    @model_validator(mode="after")
+    def _end_after_start(self) -> Self:
+        if self.end_datetime <= self.start_datetime:
             raise ValueError("end_datetime은 start_datetime 이후여야 합니다.")
-        return end_datetime
+        return self
 
 
 class SchedulerPlaceSelection(BaseModel):

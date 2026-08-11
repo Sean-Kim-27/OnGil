@@ -7,6 +7,18 @@ class PlaceCategory(str, Enum):
     RESTAURANT = "restaurant"
     CAFE = "cafe"
     TOURIST_ATTRACTION = "tourist_attraction"
+    CULTURAL_FACILITY = "cultural_facility"
+    FESTIVAL = "festival"
+    TRAVEL_COURSE = "travel_course"
+    LEISURE_SPORTS = "leisure_sports"
+    ACCOMMODATION = "accommodation"
+    SHOPPING = "shopping"
+    OTHER = "other"
+
+
+class SearchRadiusMeters(int, Enum):
+    THREE_KM = 3000
+    FIVE_KM = 5000
 
 
 class PlaceAnchor(BaseModel):
@@ -30,6 +42,7 @@ class NearbyPlace(BaseModel):
     image_url: str | None = None
     thumbnail_url: str | None = None
     telephone: str | None = None
+    content_type_id: int | None = None
     classification_code: str | None = None
     related_rank: int | None = Field(default=None, ge=1)
     related_category: str | None = None
@@ -49,17 +62,40 @@ class NearbyPlace(BaseModel):
 
 
 class NearbyPlaceCounts(BaseModel):
-    restaurant: int = Field(ge=0)
-    cafe: int = Field(ge=0)
-    tourist_attraction: int = Field(ge=0)
-    total: int = Field(ge=0)
+    restaurant: int = Field(default=0, ge=0)
+    cafe: int = Field(default=0, ge=0)
+    tourist_attraction: int = Field(default=0, ge=0)
+    cultural_facility: int = Field(default=0, ge=0)
+    festival: int = Field(default=0, ge=0)
+    travel_course: int = Field(default=0, ge=0)
+    leisure_sports: int = Field(default=0, ge=0)
+    accommodation: int = Field(default=0, ge=0)
+    shopping: int = Field(default=0, ge=0)
+    other: int = Field(default=0, ge=0)
+    total: int = Field(default=0, ge=0)
 
 
 class NearbyPlacesResponse(BaseModel):
     query: str
-    radius_m: int = Field(ge=3000, le=5000)
+    radius_m: SearchRadiusMeters
     anchor: PlaceAnchor
     counts: NearbyPlaceCounts
     places: list[NearbyPlace]
     truncated: bool
     related_enrichment_applied: bool
+
+
+class KakaoPlaceLinkRequest(BaseModel):
+    title: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r".*\S.*",
+        description="nearby 결과의 장소명",
+    )
+    latitude: float = Field(ge=-90, le=90, description="WGS84 위도")
+    longitude: float = Field(ge=-180, le=180, description="WGS84 경도")
+
+
+class KakaoPlaceLinkResponse(BaseModel):
+    kakao_place_id: str
+    place_url: str

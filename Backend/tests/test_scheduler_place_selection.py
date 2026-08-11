@@ -1,29 +1,34 @@
 import os
 import unittest
+from contextlib import nullcontext
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test.apps.googleusercontent.com")
 os.environ.setdefault("KAKAO_APP_ID", "1234")
 os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-with-32-characters")
 
-import sys
-sys.path.insert(0, "src")
-
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from core.database import Base
-from api.place.models import MemoryPlace, Place
+from api.place.models import Place
 from api.place.schemas import PlaceCategory
-from api.scheduler.models import CompanionType, MobilityMode, TripType
+from api.scheduler.models import (
+    CompanionType,
+    MobilityMode,
+    SchedulerPlace,
+    TripType,
+)
 from api.scheduler.schemas import (
     SchedulerCreateRequest,
     SchedulerPlaceCreateRequest,
     SchedulerPlaceSelection,
 )
-from api.scheduler.service import SchedulerService
+from api.scheduler.service import SchedulerService, _get_or_create_place
+from core.database import Base
 
 
 def make_session():
@@ -40,7 +45,7 @@ def make_scheduler(service: SchedulerService, memory_place_id: int | None = None
         request=SchedulerCreateRequest(
             title="추억 여행",
             mobility_mode=MobilityMode.WALK,
-            search_radius=4,
+            search_radius=3,
             trip_type=TripType.DAY_TRIP,
             memory_place_id=memory_place_id,
             companion_type=CompanionType.FAMILY,
@@ -135,6 +140,77 @@ class GetOrCreatePlaceTests(unittest.TestCase):
         with self.assertRaises(SchedulerNotFoundError):
             service.add_place(1, scheduler_id=9999, request=request)
         db.close()
+
+    def test_rolls_back_place_when_scheduler_place_insert_fails(self):
+        db = make_session()
+        service = SchedulerService(db)
+        scheduler = make_scheduler(service)
+        request = SchedulerPlaceCreateRequest(
+            place=SchedulerPlaceSelection(
+                content_id="tour-rollback",
+                title="롤백 대상 장소",
+                category=PlaceCategory.RESTAURANT,
+                latitude=37.5,
+                longitude=127.0,
+            ),
+            day_no=1,
+            visit_order=1,
+        )
+
+        def fail_scheduler_place_flush(session, flush_context, instances):
+            del flush_context, instances
+            if any(isinstance(item, SchedulerPlace) for item in session.new):
+                raise RuntimeError("scheduler place insert failed")
+
+        event.listen(db, "before_flush", fail_scheduler_place_flush)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "scheduler place insert failed"):
+                service.add_place(1, scheduler.id, request)
+        finally:
+            event.remove(db, "before_flush", fail_scheduler_place_flush)
+
+        persisted = db.scalar(
+            select(Place).where(Place.api_place_id == "tour-rollback")
+        )
+        self.assertIsNone(persisted)
+        db.close()
+
+    def test_reuses_row_that_won_a_concurrent_insert_race(self):
+        winning_place = SimpleNamespace(id=42, api_place_id="tour-race")
+
+        class RaceSession:
+            def __init__(self):
+                self.scalar_calls = 0
+
+            def scalar(self, statement):
+                del statement
+                self.scalar_calls += 1
+                return None if self.scalar_calls == 1 else winning_place
+
+            def begin_nested(self):
+                return nullcontext()
+
+            def get_bind(self):
+                return SimpleNamespace(dialect=SimpleNamespace(name="fallback"))
+
+            def add(self, place):
+                del place
+
+            def flush(self):
+                raise IntegrityError("INSERT", {}, Exception("duplicate"))
+
+        result = _get_or_create_place(
+            RaceSession(),
+            SchedulerPlaceSelection(
+                content_id="tour-race",
+                title="동시 선택 장소",
+                category=PlaceCategory.TOURIST_ATTRACTION,
+                latitude=37.5,
+                longitude=127.0,
+            ),
+        )
+
+        self.assertIs(result, winning_place)
 
 
 if __name__ == "__main__":

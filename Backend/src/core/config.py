@@ -25,8 +25,9 @@ class Settings(BaseSettings):
     KOR_SERVICE_BASE_URL: str | None = None
     KOR_RELATE_BASE_URL: str | None = None
     KOR_DATA_API_KEY: SecretStr | None = None
+    KAKAO_REST_API_KEY: SecretStr | None = None
     TOUR_API_TIMEOUT_SECONDS: float = Field(default=8.0, gt=0, le=30)
-    TOUR_API_PAGE_SIZE: int = Field(default=100, ge=10, le=1000)
+    TOUR_API_PAGE_SIZE: int = Field(default=1000, ge=10, le=1000)
     TOUR_API_MAX_RESULTS_PER_CATEGORY: int = Field(default=2000, ge=100, le=10000)
 
     REDIS_URL: str | None = None
