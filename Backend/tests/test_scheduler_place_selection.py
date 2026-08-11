@@ -19,15 +19,12 @@ from api.place.schemas import PlaceCategory
 from api.scheduler.models import (
     CompanionType,
     MobilityMode,
+    Scheduler,
     SchedulerPlace,
     TripType,
 )
-from api.scheduler.schemas import (
-    SchedulerCreateRequest,
-    SchedulerPlaceCreateRequest,
-    SchedulerPlaceSelection,
-)
-from api.scheduler.service import SchedulerService, _get_or_create_place
+from api.scheduler.schemas import SchedulerPlaceCreateRequest, SchedulerPlaceSelection
+from api.scheduler.service import SchedulerService, _upsert_place
 from core.database import Base
 
 
@@ -40,23 +37,25 @@ def make_session():
 
 
 def make_scheduler(service: SchedulerService, memory_place_id: int | None = None):
-    return service.create(
+    scheduler = Scheduler(
         user_id=1,
-        request=SchedulerCreateRequest(
-            title="추억 여행",
-            mobility_mode=MobilityMode.WALK,
-            search_radius=3,
-            trip_type=TripType.DAY_TRIP,
-            memory_place_id=memory_place_id,
-            companion_type=CompanionType.FAMILY,
-            companion_count=3,
-            start_datetime=datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc),
-            end_datetime=datetime(2026, 9, 1, 18, 0, tzinfo=timezone.utc),
-        ),
+        title="추억 여행",
+        mobility_mode=MobilityMode.WALK,
+        search_radius=3,
+        trip_type=TripType.DAY_TRIP,
+        memory_place_id=memory_place_id,
+        companion_type=CompanionType.FAMILY,
+        companion_count=3,
+        start_datetime=datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc),
+        end_datetime=datetime(2026, 9, 1, 18, 0, tzinfo=timezone.utc),
     )
+    service.db.add(scheduler)
+    service.db.commit()
+    service.db.refresh(scheduler)
+    return scheduler
 
 
-class GetOrCreatePlaceTests(unittest.TestCase):
+class UpsertPlaceTests(unittest.TestCase):
     def test_new_content_id_creates_a_place_row(self):
         db = make_session()
         service = SchedulerService(db)
@@ -72,6 +71,8 @@ class GetOrCreatePlaceTests(unittest.TestCase):
                 latitude=37.51,
                 longitude=127.01,
                 image_url="https://example.com/img.jpg",
+                kakao_place_id="kakao-111",
+                place_url="https://place.map.kakao.com/kakao-111",
             ),
             day_no=1,
             visit_order=1,
@@ -87,6 +88,11 @@ class GetOrCreatePlaceTests(unittest.TestCase):
         self.assertEqual(created_place.api_place_id, "tour-111")
         self.assertEqual(created_place.name, "오래된 냉면집")
         self.assertEqual(created_place.category, "restaurant")
+        self.assertEqual(created_place.kakao_place_id, "kakao-111")
+        self.assertEqual(
+            created_place.kakao_place_url,
+            "https://place.map.kakao.com/kakao-111",
+        )
         db.close()
 
     def test_same_content_id_reuses_existing_place_instead_of_duplicating(self):
@@ -100,6 +106,8 @@ class GetOrCreatePlaceTests(unittest.TestCase):
             category=PlaceCategory.CAFE,
             latitude=37.52,
             longitude=127.02,
+            kakao_place_id="kakao-222",
+            place_url="http://place.map.kakao.com/kakao-222",
         )
 
         first = service.add_place(
@@ -133,6 +141,8 @@ class GetOrCreatePlaceTests(unittest.TestCase):
                 category=PlaceCategory.TOURIST_ATTRACTION,
                 latitude=37.5,
                 longitude=127.0,
+                kakao_place_id="kakao-333",
+                place_url="https://place.map.kakao.com/kakao-333",
             ),
             day_no=1,
             visit_order=1,
@@ -152,6 +162,8 @@ class GetOrCreatePlaceTests(unittest.TestCase):
                 category=PlaceCategory.RESTAURANT,
                 latitude=37.5,
                 longitude=127.0,
+                kakao_place_id="kakao-rollback",
+                place_url="https://place.map.kakao.com/kakao-rollback",
             ),
             day_no=1,
             visit_order=1,
@@ -199,7 +211,7 @@ class GetOrCreatePlaceTests(unittest.TestCase):
             def flush(self):
                 raise IntegrityError("INSERT", {}, Exception("duplicate"))
 
-        result = _get_or_create_place(
+        result = _upsert_place(
             RaceSession(),
             SchedulerPlaceSelection(
                 content_id="tour-race",
@@ -207,6 +219,8 @@ class GetOrCreatePlaceTests(unittest.TestCase):
                 category=PlaceCategory.TOURIST_ATTRACTION,
                 latitude=37.5,
                 longitude=127.0,
+                kakao_place_id="kakao-race",
+                place_url="https://place.map.kakao.com/kakao-race",
             ),
         )
 
