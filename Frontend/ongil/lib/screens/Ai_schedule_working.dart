@@ -112,7 +112,7 @@ class _AiScheduleWorkingState extends State<AiScheduleWorking> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (context) => const ScheduleDetailScreen(),
+          builder: (context) => ScheduleDetailScreen(scheduleId: '1'), // 여기서 scheduleId를 실제 API에서 받아온 값으로 바꿔야 함
         ),
       );
     });
