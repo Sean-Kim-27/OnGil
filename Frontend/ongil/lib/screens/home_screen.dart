@@ -3,6 +3,7 @@ import '../widgets/top_header.dart';
 import '../widgets/main_feature_card.dart';
 import '../widgets/quick_action_cards.dart';
 import 'schedule_list_screen.dart';
+import 'map_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -16,7 +17,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // 1. 各 탭에 보여줄 화면 리스트
   List<Widget> get _pages => [
-        const Center(child: Text('지도 화면')),          // 0번 탭
+        const MapScreen(),                            // 0번 탭
         const ScheduleListScreen(),                   // 1번 탭 (⭐ 스케줄 화면!)
         _buildHomeContent(),                          // 2번 탭 (기존 홈 메인)
         const Center(child: Text('방명록 화면')),        // 3번 탭
