@@ -3,9 +3,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:kakao_map_plugin/kakao_map_plugin.dart';
-import '../models/schedule_model.dart';
+import '../models/schedule_item.dart';
+import 'dart:ui' as ui;
+import 'dart:typed_data';
+import '../services/kakao_api_service.dart';
+import '../services/schedule_api_service.dart';
 
 class MapController extends ChangeNotifier {
+  Map<String, dynamic>? selectedPlaceDetail;
+  bool isLoadingPlaceDetail = false;
+  final Map<int, Uint8List> _markerBitmapCache = {};
+
   KakaoMapController? _kakaoMapController;
 
   LatLng currentCenter = LatLng(37.5776, 126.9768);
@@ -17,6 +25,22 @@ class MapController extends ChangeNotifier {
   List<ScheduleItem> scheduleList = [];
 
   ScheduleItem? selectedScheduleItem; // 💡 선택된 장소 정보 (바텀시트용)
+
+  bool _isDisposed = false;
+
+  @override
+  void dispose() {
+    _isDisposed = true; // 💡 파괴 상태 플래그 설정
+    super.dispose();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_isDisposed) {
+      // 💡 살아있을 때만 리스너 알림!
+      super.notifyListeners();
+    }
+  }
 
   void setMapController(KakaoMapController controller) {
     _kakaoMapController = controller;
@@ -37,148 +61,159 @@ class MapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // 💡 카메라 중심 이동 헬퍼 메서드 추가
+  void panTo(LatLng latLng) {
+    _kakaoMapController?.setCenter(latLng);
+  }
+
+  // 🔍 마커 클릭 시 카카오 상세 정보 가져오기
+  Future<void> fetchPlaceDetail(String placeName, LatLng latLng) async {
+    isLoadingPlaceDetail = true;
+    selectedPlaceDetail = null;
+    notifyListeners();
+
+    // 💡 서비스 클래스로 깔끔하게 호출
+    final result = await KakaoApiService.fetchPlaceDetail(placeName, latLng);
+
+    if (result != null) {
+      selectedPlaceDetail = result;
+    } else {
+      selectedPlaceDetail = {
+        'place_name': placeName,
+        'address_name': '주소 정보 없음',
+      };
+    }
+
+    isLoadingPlaceDetail = false;
+    notifyListeners();
+  }
+
+  // 🎨 Flutter 위젯을 커스텀 마커 이미지(Uint8List)로 변환
+  Future<Uint8List> _createCustomMarkerBitmap(int order) async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final ui.Canvas canvas = ui.Canvas(pictureRecorder);
+    const double size = 90.0; // 마커 크기
+
+    if (_markerBitmapCache.containsKey(order)) {
+      return _markerBitmapCache[order]!; // 이미 만든 마커면 재사용!
+    }
+
+    // 1. 그림자 그리기
+    final Paint shadowPaint = Paint()
+      ..color = Colors.black.withOpacity(0.25)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+    canvas.drawCircle(const Offset(size / 2, size / 2 + 2), 22, shadowPaint);
+
+    // 2. 테두리 (흰색 배경)
+    final Paint whiteBorderPaint = Paint()..color = Colors.white;
+    canvas.drawCircle(const Offset(size / 2, size / 2), 22, whiteBorderPaint);
+
+    // 3. 메인 주황색 원 (#C85A32)
+    final Paint mainCirclePaint = Paint()..color = const Color(0xFFC85A32);
+    canvas.drawCircle(const Offset(size / 2, size / 2), 18, mainCirclePaint);
+
+    // 4. 숫자 텍스트 그리기
+    final TextPainter textPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+    );
+    textPainter.text = TextSpan(
+      text: '$order',
+      style: const TextStyle(
+        fontSize: 18,
+        fontWeight: FontWeight.bold,
+        color: Colors.white,
+      ),
+    );
+    textPainter.layout();
+    textPainter.paint(
+      canvas,
+      Offset((size - textPainter.width) / 2, (size - textPainter.height) / 2),
+    );
+
+    // 5. 이미지 추출
+    final ui.Image image = await pictureRecorder.endRecording().toImage(
+      size.toInt(),
+      size.toInt(),
+    );
+    final ByteData? byteData = await image.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
+
+    final Uint8List bytes = byteData!.buffer.asUint8List();
+
+    _markerBitmapCache[order] = bytes; // 캐시에 저장
+    return bytes;
+  }
+
   // 📡 실제 백엔드 스케줄 API 연동 및 자동 그리기
   Future<void> fetchAndDrawSchedule(int scheduleId) async {
-    debugPrint('🚀 [1] fetchAndDrawSchedule 시작 (ID: $scheduleId)');
+    final data = await ScheduleApiService.fetchScheduleDetail(scheduleId);
 
-    final baseUrl = dotenv.env['BASE_URL'] ?? 'https://api.yourdomain.com';
-    final url = Uri.parse('$baseUrl/schedulers/$scheduleId');
+    if (data == null) {
+      debugPrint('⚠️ 일정 데이터를 불러오지 못했습니다.');
+      notifyListeners();
+      return;
+    }
 
-    debugPrint('token: ${dotenv.env['AUTH_TOKEN']}'); // 토큰 확인용 로그
+    if (data['memory_place'] != null && data['memory_place']['name'] != null) {
+      selectedLocationName = data['memory_place']['name'];
+    } else {
+      selectedLocationName = data['title'] ?? '알 수 없는 위치';
+    }
 
-    try {
-      debugPrint('📡 [2] 백엔드 요청 보냄: $url');
-      final response = await http.get(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${dotenv.env['AUTH_TOKEN'] ?? ''}',
-        },
-      );
+    transportType = (data['mobility_mode'] == 'WALK') ? '도보' : '차';
 
-      debugPrint('📩 [3] 백엔드 응답 코드: ${response.statusCode}');
+    final List<dynamic> placesJson = data['places'] ?? [];
+    scheduleList =
+        placesJson.map((item) => ScheduleItem.fromJson(item)).toList()
+          ..sort((a, b) => a.visitOrder.compareTo(b.visitOrder));
 
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> data = json.decode(response.body);
-
-        if (data['memory_place'] != null &&
-            data['memory_place']['name'] != null) {
-          selectedLocationName = data['memory_place']['name'];
-        } else {
-          selectedLocationName = data['title'] ?? '알 수 없는 위치';
-        }
-
-        transportType = (data['mobility_mode'] == 'WALK') ? '도보' : '차';
-
-        final List<dynamic> placesJson = data['places'] ?? [];
-        scheduleList =
-            placesJson.map((item) => ScheduleItem.fromJson(item)).toList()
-              ..sort((a, b) => a.visitOrder.compareTo(b.visitOrder));
-
-        debugPrint('📍 [4] 파싱된 장소 개수: ${scheduleList.length}개');
-
-        if (scheduleList.isNotEmpty) {
-          List<LatLng> points = scheduleList
-              .map((item) => LatLng(item.latitude, item.longitude))
-              .toList();
-
-          debugPrint('🚗 [5] drawScheduleRoute 실행 전 (좌표 ${points.length}개)');
-          await drawScheduleRoute(points);
-          debugPrint('✨ [6] drawScheduleRoute 완료!');
-        } else {
-          debugPrint('⚠️ [경고] scheduleList가 비어있습니다.');
-        }
-      } else {
-        debugPrint('❌ 백엔드 API 에러 응답: ${response.body}');
-      }
-    } catch (e, stackTrace) {
-      debugPrint('💥 [예외 발생]: $e');
-      debugPrint('🔍 [스택트레이스]: $stackTrace');
+    if (scheduleList.isNotEmpty) {
+      List<LatLng> points = scheduleList
+          .map((item) => LatLng(item.latitude, item.longitude))
+          .toList();
+      await drawScheduleRoute(points);
     }
   }
 
   // 🚗 길찾기 경로 및 마커 생성
   Future<void> drawScheduleRoute(List<LatLng> schedulePoints) async {
-    if (schedulePoints.isEmpty) {
-      debugPrint('⚠️ [drawScheduleRoute] 넘겨받은 좌표가 없어!');
-      return;
-    }
+    if (schedulePoints.isEmpty) return;
 
-    debugPrint('🏁 [drawScheduleRoute] 시작! 포인트 개수: ${schedulePoints.length}');
+    // 1. 마커 생성 (기존 비트맵 캐시 로직 동일)
+    final List<Marker> customMarkers = [];
+    for (int i = 0; i < schedulePoints.length; i++) {
+      final orderNumber = i + 1;
+      final markerBytes = await _createCustomMarkerBitmap(orderNumber);
 
-    // 1. 마커 생성
-    markers = schedulePoints.asMap().entries.map((entry) {
-      int idx = entry.key;
-      return Marker(markerId: 'schedule_$idx', latLng: entry.value);
-    }).toSet();
-    debugPrint('📍 마커 ${markers.length}개 생성 완료');
-
-    List<LatLng> fullPathCoordinates = [];
-
-    // 2. 구간별 카카오 길찾기 API 호출
-    for (int i = 0; i < schedulePoints.length - 1; i++) {
-      final origin = schedulePoints[i];
-      final destination = schedulePoints[i + 1];
-
-      final url = Uri.parse(
-        'https://apis-navi.kakaomobility.com/v1/directions'
-        '?origin=${origin.longitude},${origin.latitude}'
-        '&destination=${destination.longitude},${destination.latitude}'
-        '&priority=RECOMMEND',
+      customMarkers.add(
+        Marker(
+          markerId: 'schedule_$i',
+          latLng: schedulePoints[i],
+          markerImageSrc: Uri.dataFromBytes(
+            markerBytes,
+            mimeType: 'image/png',
+          ).toString(),
+          width: 45,
+          height: 45,
+        ),
       );
+    }
+    markers = customMarkers.toSet();
 
-      debugPrint('🛣️ [$i 구간] 길찾기 요청: $url');
-
-      try {
-        final response = await http.get(
-          url,
-          headers: {
-            'Authorization': 'KakaoAK ${dotenv.env['KAKAO_REST_API_KEY']}',
-          },
-        );
-
-        debugPrint('📩 [$i 구간] 응답 코드: ${response.statusCode}');
-
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          final routes = data['routes'];
-
-          if (routes != null &&
-              routes.isNotEmpty &&
-              routes[0]['result_code'] == 0) {
-            final sections = routes[0]['sections'];
-            for (var section in sections) {
-              for (var road in section['roads']) {
-                List dynamicVertexes = road['vertexes'];
-                for (int v = 0; v < dynamicVertexes.length; v += 2) {
-                  double lng = (dynamicVertexes[v] as num).toDouble();
-                  double lat = (dynamicVertexes[v + 1] as num).toDouble();
-                  fullPathCoordinates.add(LatLng(lat, lng));
-                }
-              }
-            }
-            debugPrint(
-              '✅ [$i 구간] 도로 좌표 추출 성공! 현재 총 좌표: ${fullPathCoordinates.length}개',
-            );
-          } else {
-            debugPrint(
-              '⚠️ [$i 구간] routes 결과 없음 또는 result_code 이상: ${routes?[0]?['result_code']}',
-            );
-          }
-        } else {
-          debugPrint('❌ [$i 구간] 카카오 길찾기 API 에러 응답: ${response.body}');
-        }
-      } catch (e) {
-        debugPrint('💥 [$i 구간] 카카오 길찾기 API 호출 중 예외: $e');
-      }
+    // 2. 💡 서비스 클래스를 활용한 구간별 길찾기 경로 생성
+    List<LatLng> fullPathCoordinates = [];
+    for (int i = 0; i < schedulePoints.length - 1; i++) {
+      final routePoints = await KakaoApiService.fetchRoutePoints(
+        schedulePoints[i],
+        schedulePoints[i + 1],
+      );
+      fullPathCoordinates.addAll(routePoints);
     }
 
-    // 도로 좌표를 못 받아오면 직선 좌표라도 넣어서 예외 처리
     final finalPoints = fullPathCoordinates.isNotEmpty
         ? fullPathCoordinates
         : schedulePoints;
-
-    debugPrint('🎨 최종 폴리라인에 그려질 좌표 총 개수: ${finalPoints.length}개');
 
     polylines = {
       Polyline(

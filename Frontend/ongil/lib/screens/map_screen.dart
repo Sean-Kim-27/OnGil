@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:kakao_map_plugin/kakao_map_plugin.dart';
 import '../controllers/map_controller.dart';
-import '../models/schedule_model.dart';
+import '../models/schedule_item.dart';
+// import 'package:url_launcher/url_launcher.dart';
+import '../widgets/place_detail_bottom_sheet.dart';
+import '../constants/app_color.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -13,6 +16,25 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> {
   final MapController _controller = MapController();
   final TextEditingController _searchController = TextEditingController();
+
+  // 🔽 하단에서 올라오는 장소 상세 바텀시트
+  void _showPlaceDetailBottomSheet(
+    BuildContext context,
+    String placeName,
+    LatLng latLng,
+  ) {
+    _controller.fetchPlaceDetail(placeName, latLng);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => PlaceDetailBottomSheet(
+        controller: _controller,
+        defaultPlaceName: placeName,
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -39,7 +61,6 @@ class _MapScreenState extends State<MapScreen> {
           // 1. [배경] 카카오 지도 (마커 클릭 이벤트 추가)
           KakaoMap(
             onMapCreated: (controller) {
-              debugPrint('🔥 지도가 생성됨!'); // 👈 이게 찍히는지 확인
               _controller.setMapController(controller);
               _controller.fetchAndDrawSchedule(1);
             },
@@ -47,8 +68,19 @@ class _MapScreenState extends State<MapScreen> {
             markers: _controller.markers.toList(),
             polylines: _controller.polylines.toList(),
             onMarkerTap: (markerId, latLng, zoomLevel) {
-              // 👈 zoomLevel 추가!
-              _controller.onMarkerTapped(markerId);
+              // 💡 1. 터치한 마커 위치로 카메라 중심을 부드럽게 이동!
+              _controller.panTo(latLng);
+
+              // 2. 장소 이름 찾기
+              int index =
+                  int.tryParse(markerId.replaceAll('schedule_', '')) ?? 0;
+              String placeName = '선택한 장소';
+              if (index < _controller.scheduleList.length) {
+                placeName = _controller.scheduleList[index].title;
+              }
+
+              // 3. 바텀시트 띄우기
+              _showPlaceDetailBottomSheet(context, placeName, latLng);
             },
           ),
 
@@ -333,5 +365,61 @@ class _MapScreenState extends State<MapScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildMapOverlay() {
+    if (_controller.scheduleList.isEmpty && !_controller.isLoadingPlaceDetail) {
+      return Center(
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 24),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppColors.background,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: const [
+              BoxShadow(
+                color: AppColors.cardShadow,
+                blurRadius: 8,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.location_off_outlined,
+                size: 48,
+                color: AppColors.textIcon,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '일정 장소 정보를 불러올 수 없습니다.',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () => _controller.fetchAndDrawSchedule(1),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: const Text(
+                  '다시 시도',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
   }
 }
