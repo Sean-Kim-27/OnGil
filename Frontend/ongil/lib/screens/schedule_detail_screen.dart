@@ -1,327 +1,225 @@
 import 'package:flutter/material.dart';
-import 'schedule_list_screen.dart';
+import '../controllers/schedule_detail_controller.dart';
 
-// 나중에 API/DB에서 넘어올 일정 아이템 모델
-class ScheduleTimelineItem {
-  final String timeCategory; // 예: "오전 09:00 · 숙소"
-  final String title;        // 예: "충주 한옥스테이"
-  final String location;     // 예: "칠금동 · 도보 6분"
-  final String tag;          // 예: "체크인"
-  final IconData icon;
+class ScheduleDetailScreen extends StatefulWidget {
+  final String scheduleId;
 
-  ScheduleTimelineItem({
-    required this.timeCategory,
-    required this.title,
-    required this.location,
-    required this.tag,
-    required this.icon,
+  const ScheduleDetailScreen({
+    super.key,
+    required this.scheduleId,
   });
+
+  @override
+  State<ScheduleDetailScreen> createState() => _ScheduleDetailScreenState();
 }
 
-class ScheduleDetailScreen extends StatelessWidget {
-  const ScheduleDetailScreen({super.key});
+class _ScheduleDetailScreenState extends State<ScheduleDetailScreen> {
+  final ScheduleDetailController _controller = ScheduleDetailController();
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(() {
+      setState(() {});
+    });
+    _controller.loadScheduleDetail(widget.scheduleId);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  IconData _getCategoryIcon(String? iconType) {
+    switch (iconType) {
+      case 'school':
+        return Icons.school_outlined;
+      case 'building':
+        return Icons.account_balance_outlined;
+      case 'restaurant':
+        return Icons.restaurant_outlined;
+      case 'home':
+        return Icons.home_outlined;
+      default:
+        return Icons.place_outlined;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     const primaryColor = Color(0xFFC85A32);
     const bgColor = Color(0xFFFAF7F2);
-
-    // 나중에 DB에서 들어올 결과 데이터 스켈레톤 리스트
-    final List<ScheduleTimelineItem> timelineItems = [
-      ScheduleTimelineItem(
-        timeCategory: '오전 09:00 · 숙소',
-        title: '충주 한옥스테이',
-        location: '칠금동 · 도보 6분',
-        tag: '체크인',
-        icon: Icons.nightlight_round_outlined,
-      ),
-      ScheduleTimelineItem(
-        timeCategory: '오전 11:00 · 관광지',
-        title: '탄금대',
-        location: '칠금동 산1-1',
-        tag: '추억 반경 3km',
-        icon: Icons.account_balance_outlined,
-      ),
-      ScheduleTimelineItem(
-        timeCategory: '오후 14:00 · 카페',
-        title: '구도심 골목카페',
-        location: '성내동 12-3',
-        tag: '현지 인기',
-        icon: Icons.coffee_outlined,
-      ),
-      ScheduleTimelineItem(
-        timeCategory: '저녁 18:00 · 식당',
-        title: '충주 손칼국수',
-        location: '성내동 8-1',
-        tag: '저녁 추천',
-        icon: Icons.ramen_dining_outlined,
-      ),
-    ];
+    const cardBgColor = Colors.white;
+    const iconBoxBg = Color(0xFFEADBCE);
 
     return Scaffold(
       backgroundColor: bgColor,
+      appBar: AppBar(
+        backgroundColor: bgColor,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF2C2825), size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.more_vert, color: Color(0xFF2C2825)),
+            onPressed: () {},
+          ),
+        ],
+      ),
       body: SafeArea(
-        child: Column(
-          children: [
-            // 1. 상단 앱바 (뒤로가기, 타이틀, 수정 아이콘)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Color(0xFF2C2825)),
-                    onPressed: () => Navigator.pop(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const ScheduleListScreen(),
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  const Text(
-                    '충주 초등학교 여정',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2C2825),
-                    ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined, color: Color(0xFF2C2825), size: 22),
-                    onPressed: () {},
-                  ),
-                ],
-              ),
-            ),
-
-            // 2. 점선 연도 칩
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: primaryColor,
-                  width: 1.2,
-                  style: BorderStyle.solid, // Flutter 기본 Border는 점선 미지원이라 깔끔한 선 처리
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: const [
-                  Icon(Icons.location_on_outlined, size: 14, color: primaryColor),
-                  SizedBox(width: 4),
-                  Text(
-                    '1998년 · 초등학교 시절',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: primaryColor,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // 3. 타임라인 리스트 영역
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                itemCount: timelineItems.length,
-                itemBuilder: (context, index) {
-                  final item = timelineItems[index];
-                  final isLast = index == timelineItems.length - 1;
-
-                  return IntrinsicHeight(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // [왼쪽] 수직 타임라인 (점 + 세로 구분선)
-                        Column(
+        child: _controller.isLoading
+            ? const Center(child: CircularProgressIndicator(color: primaryColor))
+            : _controller.errorMessage != null
+                ? Center(child: Text(_controller.errorMessage!))
+                : Column(
+                    children: [
+                      // 1. 헤더 타이틀 정보
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const SizedBox(height: 4),
-                            // 노란색 지점 도트
-                            Container(
-                              width: 12,
-                              height: 12,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFFE2A84B),
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            // 세로 점선/실선 연결선
-                            if (!isLast)
-                              Expanded(
-                                child: Container(
-                                  width: 1.5,
-                                  color: const Color(0xFFE4DCD3),
-                                ),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(width: 16),
-
-                        // [오른쪽] 시간 정보 + 카테고리 카드
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.only(bottom: 24.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                            Row(
                               children: [
-                                // 시간 및 카테고리 텍스트
-                                Center(
-                                  child: Text(
-                                    item.timeCategory,
+                                Text(
+                                  _controller.scheduleDetail?['title'] ?? '',
+                                  style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                    color: primaryColor,
+                                  ),
+                                ),
+                                if (_controller.scheduleDetail?['tag'] != null) ...[
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _controller.scheduleDetail!['tag'],
                                     style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500,
-                                      color: Color(0xFF8A827A),
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFFE2A84B),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(height: 8),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _controller.scheduleDetail?['subtitle'] ?? '',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF8A827A),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
 
-                                // 장소 카드
-                                Container(
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(color: const Color(0xFFEFEBE4)),
+                      // 2. 타임라인 리스트
+                      Expanded(
+                        child: ListView.builder(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          itemCount: (_controller.scheduleDetail?['timeline'] as List? ?? []).length,
+                          itemBuilder: (context, index) {
+                            final item = _controller.scheduleDetail!['timeline'][index];
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 16),
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: cardBgColor,
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: const Color(0xFFEFEBE4)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.02),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
                                   ),
-                                  child: Row(
-                                    children: [
-                                      // 아이콘 박스
-                                      Container(
-                                        width: 52,
-                                        height: 52,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFEADBCE).withOpacity(0.5),
-                                          borderRadius: BorderRadius.circular(16),
+                                ],
+                              ),
+                              child: Row(
+                                children: [
+                                  // 순서 & 아이콘 박스
+                                  Container(
+                                    width: 56,
+                                    height: 56,
+                                    decoration: BoxDecoration(
+                                      color: iconBoxBg,
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: Stack(
+                                      alignment: Alignment.center,
+                                      children: [
+                                        Icon(
+                                          _getCategoryIcon(item['icon']),
+                                          color: const Color(0xFF8A827A),
+                                          size: 26,
                                         ),
-                                        child: Icon(item.icon, color: const Color(0xFF8C7A6B), size: 26),
-                                      ),
-                                      const SizedBox(width: 16),
+                                        Positioned(
+                                          top: 4,
+                                          left: 6,
+                                          child: Text(
+                                            '${item['order']}',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: primaryColor,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
 
-                                      // 상세 정보
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                  // 내용
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                           children: [
                                             Text(
-                                              item.title,
+                                              item['name'],
                                               style: const TextStyle(
                                                 fontSize: 16,
                                                 fontWeight: FontWeight.bold,
                                                 color: Color(0xFF2C2825),
                                               ),
                                             ),
-                                            const SizedBox(height: 4),
                                             Text(
-                                              item.location,
+                                              item['time'],
                                               style: const TextStyle(
                                                 fontSize: 12,
-                                                color: Color(0xFF8A827A),
-                                              ),
-                                            ),
-                                            const SizedBox(height: 8),
-
-                                            // 연주황 칩 태그
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFFF9EAE1),
-                                                borderRadius: BorderRadius.circular(12),
-                                              ),
-                                              child: Text(
-                                                item.tag,
-                                                style: const TextStyle(
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: primaryColor,
-                                                ),
+                                                color: primaryColor,
+                                                fontWeight: FontWeight.w600,
                                               ),
                                             ),
                                           ],
                                         ),
-                                      ),
-                                    ],
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          item['memo'],
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            color: Color(0xFF8A827A),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
-
-            // 4. 하단 버튼 영역 (공유하기 / 일정 편집하기)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              decoration: const BoxDecoration(
-                color: bgColor,
-                border: Border(top: BorderSide(color: Color(0xFFEFEBE4))),
-              ),
-              child: Row(
-                children: [
-                  // 공유하기 버튼
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(Icons.share_outlined, size: 18, color: Color(0xFF2C2825)),
-                      label: const Text(
-                        '공유하기',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF2C2825),
+                                ],
+                              ),
+                            );
+                          },
                         ),
                       ),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        side: const BorderSide(color: Color(0xFFDDD7CD)),
-                        backgroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                    ),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-
-                  // 일정 편집하기 버튼
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(Icons.edit, size: 18, color: Colors.white),
-                      label: const Text(
-                        '일정 편집하기',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        backgroundColor: primaryColor,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
