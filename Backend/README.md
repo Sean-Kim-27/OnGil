@@ -99,6 +99,7 @@ KOR_SERVICE_BASE_URL=https://apis.data.go.kr/B551011/KorService2
 KOR_RELATE_BASE_URL=https://apis.data.go.kr/B551011/TarRlteTarService1
 KOR_DATA_API_KEY=발급받은_인증키
 KAKAO_REST_API_KEY=카카오디벨로퍼스_REST_API_키
+KAKAO_ROUTE_TIMEOUT_SECONDS=8
 TOUR_API_PAGE_SIZE=1000
 ```
 
@@ -148,6 +149,106 @@ Content-Type: application/json
 - `tourist_attraction`, `cultural_facility`
 - `festival`, `travel_course`, `leisure_sports`
 - `accommodation`, `shopping`, `other`
+
+### 최적화된 일정 생성 및 수정
+
+`POST /api/v1/schedulers`의 `places`에는 사용자가 선택한 장소 정보만 전달합니다.
+`day_no`, `time_slot`, `visit_order`는 프론트에서 받지 않고 서버가 자동 생성합니다.
+
+서버는 추억 장소를 출발점으로 최근접 이웃 + 2-opt로 방문 순서를 정한 뒤, 그
+순서를 카카오 자동차/도보 경로 API로 한 번 검증합니다. 카카오 응답의 구간별
+이동시간과 카테고리별 체류시간을 `start_datetime`부터 순차 배치하며, 마지막
+방문이 `end_datetime`을 넘으면 422를 반환하고 아무 레코드도 저장하지 않습니다.
+카카오 API가 일시적으로 실패하거나 키가 없으면 직선거리와 이동 방식별 기본
+속도로 이동시간을 추정하고 `route_verified=false`로 저장합니다.
+
+여러 날짜에 걸친 일정은 첫날 `start_datetime`에서 시작하고, 최종일 전에는
+20:00까지만 배치한 뒤 다음 날 09:00부터 이어집니다. 최종일에는 프론트가 보낸
+`end_datetime`을 그대로 마감으로 사용합니다. 이 기본 활동시간 정책은 향후
+사용자 설정이나 숙박·영업시간 규칙으로 교체할 수 있도록 플래너에 분리되어 있습니다.
+
+음식점은 활동시간과 겹치는 식사 시간창에 우선 배치합니다. 아침은
+07:30~10:00, 점심은 11:30~14:00, 저녁은 17:30~20:30이며 각 식사는 60분입니다.
+식사 슬롯보다 음식점이 많거나 남은 슬롯에 도착할 수 없으면 해당 장소를 버리지
+않고 `schedule_role=SNACK`인 45분 일반 방문으로 배치합니다. 카페·관광지 등은
+식사 슬롯 사이의 빈 시간에 먼저 채워집니다.
+
+숙박 장소는 날짜가 다른 `OVERNIGHT` 일정에서 여행 박 수만큼 선택할 수 있습니다.
+1박2일은 최대 1곳, 2박3일은 최대 2곳이며 선택한 숙소 순서대로 각 숙박일에
+할당됩니다. 각 숙박일 체크인은 15:00을 목표로 하고 15:00~16:00 도착을 우선하는
+소프트 제약이며, 이동 때문에 늦으면 해당 날짜 활동시간 안에서 가장 가까운 가능한
+시각으로 밀립니다. 체크아웃은 각 다음 날 11:00을 기본값으로 저장하며, 체크아웃
+날짜의 식사·카페·관광 일정도 11:00 이후부터 배치합니다. 응답의
+`check_in_datetime`, `check_out_datetime`, `schedule_role=ACCOMMODATION`으로 확인할
+수 있습니다. 여행 박 수보다 숙소가 많으면 저장과 카카오 호출 전에 422로
+거절합니다.
+
+숙소 수가 박 수보다 적으면 마지막으로 선택한 숙소가 남은 숙박일을 연박으로
+담당합니다. 예를 들어 3박4일에 숙소 2곳을 고르면 첫 숙소에서 1박하고 두 번째
+숙소에서 2박한 뒤 마지막 날 체크아웃합니다.
+
+```json
+{
+  "title": "추억 여행",
+  "mobility_mode": "WALK",
+  "search_radius": 3,
+  "trip_type": "DAY_TRIP",
+  "memory_place": {
+    "name": "옛날 학교",
+    "latitude": 37.5665,
+    "longitude": 126.978
+  },
+  "places": [
+    {
+      "content_id": "tour-1",
+      "title": "오래된 냉면집",
+      "category": "restaurant",
+      "latitude": 37.567,
+      "longitude": 126.979
+    }
+  ],
+  "companion_type": "FAMILY",
+  "companion_count": 3,
+  "start_datetime": "2026-09-01T09:00:00+09:00",
+  "end_datetime": "2026-09-01T18:00:00+09:00"
+}
+```
+
+생성 후 장소의 순서와 시간은
+`PATCH /api/v1/schedulers/{scheduler_id}/places/{scheduler_place_id}`로 수정할 수
+있습니다. `scheduled_start_datetime`과 `scheduled_end_datetime`은 전체 일정 범위
+안에 있어야 합니다. 카카오 1회 호출의 경유지 제한 때문에 도보는 선택 장소
+6개, 자동차는 31개까지 허용합니다.
+
+숙박 범위와 숙소 순서는 전체 교체 API로 함께 수정합니다. 최초 일정 생성에는
+`stays`를 보내지 않아도 되며, 생성 응답의 숙소 `SchedulerPlace.id`를 수정 요청에
+사용합니다. 날짜 범위가 실제 순서를 결정하므로 아래처럼 숙소 B를 첫 범위에 두면
+기존 A → B 일정도 B → A로 바뀝니다. 서버는 모든 여행 박이 빈 날짜나 중복 없이
+연속 배정됐는지 검증한 뒤 전체 일정을 다시 최적화하고, 카카오 경로 API는 수정
+요청당 최대 한 번 호출합니다.
+
+```http
+PUT /api/v1/schedulers/{scheduler_id}/stays
+Authorization: Bearer <OnGil access token>
+Content-Type: application/json
+```
+
+```json
+{
+  "stays": [
+    {
+      "scheduler_place_id": 202,
+      "check_in_date": "2026-09-01",
+      "check_out_date": "2026-09-03"
+    },
+    {
+      "scheduler_place_id": 101,
+      "check_in_date": "2026-09-03",
+      "check_out_date": "2026-09-04"
+    }
+  ]
+}
+```
 
 카페는 TourAPI 분류체계의 `FD05`를 기준으로 음식점과 분리합니다. 캠핑·카라반·
 글램핑(`AC05`)은 원본 관광타입이 레포츠(28)이지만 온길 응답에서는 숙박으로
