@@ -1,19 +1,46 @@
-from fastapi import APIRouter, HTTPException, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from api.scheduler.schemas import (
     SchedulerCreateRequest,
     SchedulerPlaceCreateRequest,
     SchedulerPlaceResponse,
+    SchedulerPlaceUpdateRequest,
     SchedulerResponse,
+    SchedulerStaysReplaceRequest,
 )
 from api.scheduler.service import (
     MemoryPlaceNotFoundError,
+    ScheduleOptimizationError,
     SchedulerNotFoundError,
     SchedulerService,
 )
+from core.config import settings
 from core.dependencies import CurrentUser, DatabaseSession
+from infra.kakao_route import KakaoRouteClient, RouteVerifier
 
 router = APIRouter(prefix="/schedulers", tags=["schedulers"])
+
+
+def get_route_verifier() -> RouteVerifier | None:
+    api_key = (
+        settings.KAKAO_REST_API_KEY.get_secret_value().strip()
+        if settings.KAKAO_REST_API_KEY
+        else ""
+    )
+    if not api_key:
+        return None
+    return KakaoRouteClient(
+        rest_api_key=api_key,
+        timeout_seconds=settings.KAKAO_ROUTE_TIMEOUT_SECONDS,
+    )
+
+
+RouteVerifierDependency = Annotated[
+    RouteVerifier | None,
+    Depends(get_route_verifier),
+]
 
 
 @router.post(
@@ -26,13 +53,19 @@ def create_scheduler(
     request: SchedulerCreateRequest,
     current_user: CurrentUser,
     db: DatabaseSession,
+    route_verifier: RouteVerifierDependency,
 ) -> SchedulerResponse:
-    service = SchedulerService(db)
+    service = SchedulerService(db, route_verifier)
     try:
         scheduler = service.create(current_user.id, request)
     except MemoryPlaceNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ScheduleOptimizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
         ) from exc
     return SchedulerResponse.model_validate(scheduler)
 
@@ -60,6 +93,33 @@ def get_scheduler(
     except SchedulerNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    return SchedulerResponse.model_validate(scheduler)
+
+
+@router.put(
+    "/{scheduler_id}/stays",
+    response_model=SchedulerResponse,
+    summary="숙박 범위·숙소 순서 전체 교체 후 일정 재최적화",
+)
+def replace_scheduler_stays(
+    scheduler_id: int,
+    request: SchedulerStaysReplaceRequest,
+    current_user: CurrentUser,
+    db: DatabaseSession,
+    route_verifier: RouteVerifierDependency,
+) -> SchedulerResponse:
+    service = SchedulerService(db, route_verifier)
+    try:
+        scheduler = service.replace_stays(current_user.id, scheduler_id, request)
+    except (SchedulerNotFoundError, MemoryPlaceNotFoundError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ScheduleOptimizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
         ) from exc
     return SchedulerResponse.model_validate(scheduler)
 
@@ -99,6 +159,43 @@ def add_scheduler_place(
     except SchedulerNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ScheduleOptimizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    return SchedulerPlaceResponse.model_validate(scheduler_place)
+
+
+@router.patch(
+    "/{scheduler_id}/places/{scheduler_place_id}",
+    response_model=SchedulerPlaceResponse,
+    summary="자동 생성된 장소의 순서·시간 수정",
+)
+def update_scheduler_place(
+    scheduler_id: int,
+    scheduler_place_id: int,
+    request: SchedulerPlaceUpdateRequest,
+    current_user: CurrentUser,
+    db: DatabaseSession,
+) -> SchedulerPlaceResponse:
+    service = SchedulerService(db)
+    try:
+        scheduler_place = service.update_place(
+            current_user.id,
+            scheduler_id,
+            scheduler_place_id,
+            request,
+        )
+    except SchedulerNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ScheduleOptimizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
         ) from exc
     return SchedulerPlaceResponse.model_validate(scheduler_place)
 

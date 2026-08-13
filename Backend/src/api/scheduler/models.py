@@ -1,6 +1,15 @@
 import enum
 
-from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer, String
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -33,6 +42,13 @@ class TimeSlot(str, enum.Enum):
     NIGHT = "NIGHT"  # 밤
 
 
+class ScheduleRole(str, enum.Enum):
+    MEAL = "MEAL"
+    SNACK = "SNACK"
+    GENERAL_VISIT = "GENERAL_VISIT"
+    ACCOMMODATION = "ACCOMMODATION"
+
+
 # 1. 스케줄러 기본 정보 (뼈대)
 class Scheduler(Base):
     __tablename__ = "schedulers"
@@ -62,6 +78,20 @@ class Scheduler(Base):
     )
     end_datetime = Column(
         DateTime(timezone=True), nullable=False, comment="여행 종료 일시"
+    )
+    optimization_basis = Column(
+        String(50),
+        nullable=False,
+        default="GEODESIC_APPROXIMATION",
+        server_default="GEODESIC_APPROXIMATION",
+        comment="방문 순서 최적화에 사용한 비용 기준",
+    )
+    route_verified = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment="카카오 경로 API 검증 성공 여부",
     )
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -96,6 +126,31 @@ class SchedulerPlace(Base):
         comment="시간대 (아침, 점심, 저녁 등)",
     )
     visit_order = Column(Integer, nullable=False, comment="해당 일차의 방문 순서")
+    scheduled_start_datetime = Column(
+        DateTime(timezone=True), nullable=True, comment="자동/수동 배정 방문 시작 일시"
+    )
+    scheduled_end_datetime = Column(
+        DateTime(timezone=True), nullable=True, comment="자동/수동 배정 방문 종료 일시"
+    )
+    travel_seconds_from_previous = Column(
+        Integer, nullable=True, comment="직전 지점부터 예상 이동시간(초)"
+    )
+    travel_distance_m = Column(
+        Integer, nullable=True, comment="직전 지점부터 예상 이동거리(미터)"
+    )
+    schedule_role = Column(
+        Enum(ScheduleRole, native_enum=False, length=50),
+        nullable=False,
+        default=ScheduleRole.GENERAL_VISIT,
+        server_default=ScheduleRole.GENERAL_VISIT.value,
+        comment="일정 내 장소 역할(식사/간식/일반 방문/숙박)",
+    )
+    check_in_datetime = Column(
+        DateTime(timezone=True), nullable=True, comment="숙박 체크인 일시"
+    )
+    check_out_datetime = Column(
+        DateTime(timezone=True), nullable=True, comment="숙박 체크아웃 일시"
+    )
 
     scheduler = relationship("Scheduler", back_populates="places")
     place = relationship("Place")
