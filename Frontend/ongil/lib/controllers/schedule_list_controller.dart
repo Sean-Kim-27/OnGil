@@ -20,13 +20,9 @@ class ScheduleListController extends ChangeNotifier {
     } catch (e) {
       isLoading = false;
       errorMessage = '스케줄 목록을 불러오는 데 실패했어요.';
-<<<<<<< HEAD
-      // notifyListeners();
-=======
       // 🐛 버그 수정: notifyListeners()가 주석 처리돼 있어서 실패해도 화면이
       // isLoading=true인 채로 멈춰있었음 (로딩 스피너가 영원히 안 사라짐).
       notifyListeners();
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
     }
   }
 

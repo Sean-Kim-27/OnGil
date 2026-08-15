@@ -2,14 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:kakao_map_plugin/kakao_map_plugin.dart';
 import '../controllers/map_controller.dart';
 import '../models/schedule_item.dart';
-<<<<<<< HEAD
-// import 'package:url_launcher/url_launcher.dart';
-import '../widgets/place_detail_bottom_sheet.dart';
-import '../constants/app_color.dart';
-
-class MapScreen extends StatefulWidget {
-  const MapScreen({super.key});
-=======
 import '../widgets/place_detail_bottom_sheet.dart';
 import '../constants/app_color.dart';
 import '../services/place_service.dart';
@@ -19,7 +11,6 @@ class MapScreen extends StatefulWidget {
   final NearbySearchResult? searchResult;
 
   const MapScreen({super.key, this.searchResult});
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 
   @override
   State<MapScreen> createState() => _MapScreenState();
@@ -29,11 +20,7 @@ class _MapScreenState extends State<MapScreen> {
   final MapController _controller = MapController();
   final TextEditingController _searchController = TextEditingController();
 
-<<<<<<< HEAD
-  // 🔽 하단에서 올라오는 장소 상세 바텀시트
-=======
   // 하단에서 올라오는 장소 상세 바텀시트
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
   void _showPlaceDetailBottomSheet(
     BuildContext context,
     String placeName,
@@ -74,13 +61,6 @@ class _MapScreenState extends State<MapScreen> {
     return Scaffold(
       body: Stack(
         children: [
-<<<<<<< HEAD
-          // 1. [배경] 카카오 지도 (마커 클릭 이벤트 추가)
-          KakaoMap(
-            onMapCreated: (controller) {
-              _controller.setMapController(controller);
-              _controller.fetchAndDrawSchedule(1);
-=======
           // 1. 카카오 지도 
           KakaoMap(
             onMapCreated: (controller) {
@@ -94,17 +74,12 @@ class _MapScreenState extends State<MapScreen> {
               }
               // 최근에 만든 스케줄이 있으면 그 경로를 그려줌
               _controller.fetchAndDrawLastSchedule();
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
             },
             center: _controller.currentCenter,
             markers: _controller.markers.toList(),
             polylines: _controller.polylines.toList(),
             onMarkerTap: (markerId, latLng, zoomLevel) {
-<<<<<<< HEAD
-              // 💡 1. 터치한 마커 위치로 카메라 중심을 부드럽게 이동!
-=======
               //  1. 터치한 마커 위치로 카메라 중심을 부드럽게 이동
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
               _controller.panTo(latLng);
 
               // 2. 장소 이름 찾기
@@ -251,12 +226,9 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ),
 
-<<<<<<< HEAD
-=======
           // 3-1. [중앙] 아직 그려진 스케줄이 없을 때 안내 카드 (기존에 만들어만 놓고 화면에실제로 띄우진 않고 있던 위젯이라 여기서 연결함)
           _buildMapOverlay(),
 
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
           // 3. [하단] 선택된 장소 상세 카드 (마커 터치 시 노출)
           if (_controller.selectedScheduleItem != null)
             Positioned(
@@ -275,15 +247,11 @@ class _MapScreenState extends State<MapScreen> {
               height: 54,
               child: ElevatedButton.icon(
                 onPressed: () {
-<<<<<<< HEAD
-                  Navigator.pushNamed(context, '/place_select');
-=======
                   Navigator.pushNamed(
                     context,
                     '/place_select',
                     arguments: widget.searchResult?.places,
                   );
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
                 },
                 icon: const Icon(Icons.route_outlined, color: Colors.white),
                 label: const Text(
@@ -418,9 +386,6 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Widget _buildMapOverlay() {
-<<<<<<< HEAD
-    if (_controller.scheduleList.isEmpty && !_controller.isLoadingPlaceDetail) {
-=======
     if (_controller.isLoadingSchedule) {
       return const Center(
         child: CircularProgressIndicator(color: AppColors.primary),
@@ -428,7 +393,6 @@ class _MapScreenState extends State<MapScreen> {
     }
     if (_controller.scheduleList.isEmpty && !_controller.isLoadingPlaceDetail) {
       final hasTriedBefore = _controller.lastAttemptedScheduleId != null;
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
       return Center(
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 24),
@@ -447,48 +411,21 @@ class _MapScreenState extends State<MapScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-<<<<<<< HEAD
-              const Icon(
-                Icons.location_off_outlined,
-=======
               Icon(
                 hasTriedBefore ? Icons.location_off_outlined : Icons.route_outlined,
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
                 size: 48,
                 color: AppColors.textIcon,
               ),
               const SizedBox(height: 12),
-<<<<<<< HEAD
-              const Text(
-                '일정 장소 정보를 불러올 수 없습니다.',
-                style: TextStyle(
-=======
               Text(
                 hasTriedBefore ? '일정 장소 정보를 불러올 수 없습니다.' : '아직 만든 스케줄이 없어요.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
                   color: AppColors.textPrimary,
                 ),
               ),
-<<<<<<< HEAD
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () => _controller.fetchAndDrawSchedule(1),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-                child: const Text(
-                  '다시 시도',
-                  style: TextStyle(color: Colors.white),
-                ),
-              ),
-=======
               if (!hasTriedBefore) ...[
                 const SizedBox(height: 6),
                 Text(
@@ -513,7 +450,6 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                 ),
               ],
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
             ],
           ),
         ),

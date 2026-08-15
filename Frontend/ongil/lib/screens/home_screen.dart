@@ -7,15 +7,12 @@ import '../widgets/top_header.dart';
 import '../widgets/home_search_bar.dart';
 import '../widgets/main_feature_card.dart';
 import '../widgets/quick_action_cards.dart';
-<<<<<<< HEAD
-=======
 import '../widgets/recommendation_card.dart';
 import '../widgets/kakao_webview_screen.dart';
 import '../services/auth_service.dart';
 import '../services/place_service.dart';
 import 'settings_screen.dart';
 import 'recommendation_list_screen.dart';
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 import 'schedule_list_screen.dart';
 import 'map_screen.dart';
 
@@ -27,7 +24,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-<<<<<<< HEAD
   int _selectedIndex = 2; // 기본 탭: 홈(2번)
 
   // 1. 各 탭에 보여줄 화면 리스트
@@ -41,7 +37,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   static const Color primaryColor = Color(0xFFC85A32); // 온길 시그니처 테라코타 오렌지
   static const Color bgColor = Color(0xFFFAF7F2);
-=======
   int _navIndex = 2; // '홈' 탭이 기본 선택 (0:지도 1:스케줄 2:홈 3:방명록 4:설정)
   String? _nickname;
 
@@ -269,12 +264,10 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-<<<<<<< HEAD
       backgroundColor: const Color(0xFFFAF7F2),
       
       // ⭐ 현재 선택된 탭에 맞춰 화면을 띄워줌! (하단 바는 고정 유지)
@@ -289,25 +282,25 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 기존 홈 화면 내용 (독립 위젯 함수로 정리)
-  Widget _buildHomeContent() {
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          const TopHeader(),
-          const SizedBox(height: 20),
-          const _GreetingSection(),
-          const SizedBox(height: 24),
-          const MainFeatureCard(),
-          const SizedBox(height: 16),
+  // // 기존 홈 화면 내용 (독립 위젯 함수로 정리)
+  // Widget _buildHomeContent() {
+  //   return SingleChildScrollView(
+  //     child: Column(
+  //       children: [
+  //         const TopHeader(),
+  //         const SizedBox(height: 20),
+  //         const _GreetingSection(),
+  //         const SizedBox(height: 24),
+  //         const MainFeatureCard(),
+  //         const SizedBox(height: 16),
           
-          // 퀵 액션 카드에서 스케줄 누르면 로딩 띄우기 예시
-          QuickActionCards(),
-          const SizedBox(height: 20),
-        ],
-      ),
-    );
-  }
+  //         // 퀵 액션 카드에서 스케줄 누르면 로딩 띄우기 예시
+  //         QuickActionCards(),
+  //         const SizedBox(height: 20),
+  //       ],
+  //     ),
+  //   );
+  // }
 
   // 하단 네비게이션 바 클릭 로직
   Widget _buildBottomNavigationBar() {
@@ -321,7 +314,7 @@ class _HomeScreenState extends State<HomeScreen> {
           setState(() {
             _selectedIndex = index;
           });
-=======
+
       backgroundColor: AppColors.background,
       body: _buildTabBody(context),
       bottomNavigationBar: AppBottomNavBar(
@@ -333,7 +326,6 @@ class _HomeScreenState extends State<HomeScreen> {
           } else {
             setState(() => _navIndex = i);
           }
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
         },
       ),
     );

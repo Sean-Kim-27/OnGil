@@ -4,10 +4,6 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 
 class ScheduleApiService {
-<<<<<<< HEAD
-  static String get _baseUrl =>
-      dotenv.env['BASE_URL'] ?? '백엔드 URL이 설정되지 않았습니다.';
-=======
   // 🐛 버그 수정: api_service.dart의 ApiService._baseUrl과 같은 이유로 404가 나던
   // 부분(자세한 설명은 그쪽 주석 참고). 다른 서비스들과 같은 백엔드/버전 프리픽스
   // (/api/v1)를 기본값으로 쓰도록 통일함.
@@ -19,7 +15,6 @@ class ScheduleApiService {
     if (host.endsWith('/')) host = host.substring(0, host.length - 1);
     return host.endsWith('/api/v1') ? host : '$host/api/v1';
   }
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 
   /// 📅 일정 상세 정보 백엔드 API 조회
   static Future<Map<String, dynamic>?> fetchScheduleDetail(int scheduleId) async {

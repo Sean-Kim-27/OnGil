@@ -1,33 +1,3 @@
-<<<<<<< HEAD
-import 'dart:async';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart'; // 👈 추가
-
-class ApiService {
-  static String authToken = "${dotenv.env['AUTH_TOKEN']}"; // 인증 토큰 (필요 시)
-
-  // 1. 더미 AI 스케줄 생성 요청 (POST)
-  static Future<Map<String, dynamic>> createSchedule(
-    List<String> placeIds,
-  ) async {
-    // 2초 네트워크 통신 지연 흉내
-    await Future.delayed(const Duration(seconds: 2));
-
-    return {
-      "status": "success",
-      "schedule_id": "sched_101",
-      "title": "충주 감성 당일치기 코스",
-      "selected_places_count": placeIds.length,
-      "places": placeIds,
-    };
-  }
-
-  // 2. 더미 내 스케줄 목록 조회 (GET)
-  static Future<List<dynamic>> fetchSchedules() async {
-    final response = await http.get(
-      Uri.parse('${dotenv.env['BASE_URL']}/schedulers'),
-=======
 // ℹ️ controllers/schedule_list_controller.dart, schedule_creation_controller.dart,
 // schedule_detail_controller.dart, screens/ai_schedule_working.dart에서 씀.
 // 목록/상세 조회, 스케줄 생성까지 real 백엔드(api.seankim428.site/api/v1)를 침.
@@ -120,58 +90,36 @@ class ApiService {
     debugPrint('📥 [fetchSchedules] GET $url');
     final response = await http.get(
       url,
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
       headers: {'Authorization': 'Bearer $authToken'},
     );
 
     if (response.statusCode == 200) {
-<<<<<<< HEAD
-      final data = jsonDecode(response.body);
-=======
       final data = jsonDecode(utf8.decode(response.bodyBytes));
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
       return data;
     } else {
       throw Exception('데이터 로드 실패');
     }
   }
 
-<<<<<<< HEAD
-  // 3. 더미 스케줄 삭제 (DELETE)
-=======
   // 스케줄 삭제 (DELETE) — 아직 더미. 실제 연동 필요하면 알려주세요.
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
   static Future<bool> deleteSchedule(String scheduleId) async {
     await Future.delayed(const Duration(milliseconds: 400));
     return true;
   }
 
-<<<<<<< HEAD
-  // 기존 ApiService 클래스 내부에 추가
-=======
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
   static Future<Map<String, dynamic>> fetchScheduleDetail(
     String scheduleId,
   ) async {
     final response = await http.get(
-<<<<<<< HEAD
-      Uri.parse('${dotenv.env['BASE_URL']}/schedulers/$scheduleId'),
-=======
       Uri.parse('$_baseUrl/schedulers/$scheduleId'),
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
       headers: {'Authorization': 'Bearer $authToken'},
     );
 
     if (response.statusCode == 200) {
-<<<<<<< HEAD
-      final data = jsonDecode(response.body);
-      return data["places"];
-=======
       // 🐛 버그 수정: 원래 data["places"]만 반환해서 title/subtitle/timeline이
       // 다 날아가고 있었음. ScheduleDetailScreen은 전체 객체를 기대함.
       final data = jsonDecode(utf8.decode(response.bodyBytes));
       return data;
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
     } else {
       throw Exception('데이터 로드 실패');
     }

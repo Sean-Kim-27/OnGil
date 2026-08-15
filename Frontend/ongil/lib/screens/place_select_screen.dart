@@ -1,10 +1,5 @@
 import 'package:flutter/material.dart';
 import '../controllers/schedule_creation_controller.dart';
-<<<<<<< HEAD
-
-class PlaceSelectScreen extends StatefulWidget {
-  const PlaceSelectScreen({super.key});
-=======
 import '../services/place_service.dart';
 import '../widgets/home_search_bar.dart';
 
@@ -15,7 +10,6 @@ class PlaceSelectScreen extends StatefulWidget {
   final List<RecommendedPlace>? places;
 
   const PlaceSelectScreen({super.key, this.places});
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 
   @override
   State<PlaceSelectScreen> createState() => _PlaceSelectScreenState();
@@ -24,15 +18,6 @@ class PlaceSelectScreen extends StatefulWidget {
 class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
   final ScheduleCreationController _controller = ScheduleCreationController();
 
-<<<<<<< HEAD
-  // 테스트용 더미 장소 데이터
-  final List<Map<String, String>> _dummyPlaces = [
-    {'id': 'p1', 'title': '탄금대 공원', 'sub': '충주 대표 명소 · 도보 10분'},
-    {'id': 'p2', 'title': '중앙탑 사적공원', 'sub': '시원한 호수뷰 · 산책로'},
-    {'id': 'p3', 'title': '활옥동굴', 'sub': '신비로운 동굴 카약 체험'},
-    {'id': 'p4', 'title': '수주팔봉', 'sub': '차박과 차크닉의 성지'},
-  ];
-=======
   // ScheduleCreationController의 스텝(1~4: 명소/숙소/카페/식당)을 PlaceService가
   // 매기는 카테고리 라벨(관광/숙박/카페/음식)에 매핑함.
   static const Map<int, String> _stepToCategory = {
@@ -57,16 +42,10 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
     final category = _stepToCategory[_controller.currentStep];
     return _allPlaces.where((p) => p.category == category).toList();
   }
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 
   @override
   void initState() {
     super.initState();
-<<<<<<< HEAD
-    _controller.addListener(() {
-      setState(() {});
-    });
-=======
     _places = widget.places ?? [];
     _controller.addListener(() {
       setState(() {});
@@ -76,17 +55,11 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
     if (_places.isEmpty) {
       _restoreLastAddress();
     }
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
   }
 
   @override
   void dispose() {
     _controller.dispose();
-<<<<<<< HEAD
-    super.dispose();
-  }
-
-=======
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -125,7 +98,6 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
     }
   }
 
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
   @override
   Widget build(BuildContext context) {
     const primaryColor = Color(0xFFC85A32);
@@ -198,71 +170,6 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
 
             // 장소 선택 리스트 영역
             Expanded(
-<<<<<<< HEAD
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                itemCount: _dummyPlaces.length,
-                itemBuilder: (context, index) {
-                  final place = _dummyPlaces[index];
-                  final isSelected = _controller.currentStepSelectedIds.contains(place['id']);
-
-                  return GestureDetector(
-                    onTap: () => _controller.togglePlaceSelection(place['id']!),
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: isSelected ? primaryColor : const Color(0xFFEFEBE4),
-                          width: isSelected ? 2 : 1,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.03),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  place['title']!,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF2C2825),
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  place['sub']!,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    color: Color(0xFF8A827A),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Icon(
-                            isSelected ? Icons.check_circle : Icons.add_circle_outline,
-                            color: isSelected ? primaryColor : const Color(0xFFACACAC),
-                            size: 26,
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-=======
               child: _allPlaces.isEmpty
                   ? _buildSearchEmptyState()
                   : _currentStepPlaces.isEmpty
@@ -338,7 +245,6 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
                             );
                           },
                         ),
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
             ),
 
             // 하단 버튼 (4단계 완료 시 바로 ai_schedule_working으로 전환)
@@ -358,16 +264,6 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
                         return;
                       }
 
-<<<<<<< HEAD
-                      // 백엔드 요청을 보내면서 'AI 로딩 화면'으로 즉시 전환!
-                      final selectedIds = _controller.getAllSelectedPlaceIds;
-                      
-                      if (context.mounted) {
-                        Navigator.pushReplacementNamed(
-                          context, 
-                          '/ai_working',
-                          arguments: selectedIds, // 선택한 장소 데이터 전달
-=======
                       // 선택한 장소 '제목'들을 실제 RecommendedPlace 객체로 다시 매칭해서
                       // (좌표/카테고리 등 상세 정보까지) AI 로딩 화면으로 통째로 넘겨줌.
                       final selectedTitles = _controller.getAllSelectedPlaceIds.toSet();
@@ -379,7 +275,6 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
                           context,
                           '/ai_working',
                           arguments: selectedPlaces,
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
                         );
                       }
                     }
@@ -407,9 +302,6 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
       ),
     );
   }
-<<<<<<< HEAD
-}
-=======
 
   // '먼저 검색해주세요'로 막다른 길이던 화면 대신, 이 화면에서 바로 검색까지
   // 끝낼 수 있게 검색창 + 안내 문구를 함께 보여줌.
@@ -470,4 +362,3 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
     );
   }
 }
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
