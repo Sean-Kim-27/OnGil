@@ -1,0 +1,40 @@
+name: ongil
+description: 온길 - 추억의 장소를 다시 걷는 앱
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_secure_storage: ^10.3.1
+  google_fonts: ^6.2.1
+  google_sign_in: ^7.2.0
+  http: ^1.6.0
+  kakao_flutter_sdk_common: ^1.9.0
+  kakao_flutter_sdk_user: ^1.9.0
+  image_picker: ^1.2.3
+  path_provider: ^2.1.6
+
+  flutter_dotenv: ^6.0.1
+  kakao_map_plugin: ^0.4.0
+  webview_flutter: ^4.14.1
+  url_launcher: ^6.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - .env
+
+  fonts:
+    - family: Pretendard
+      fonts:
+        - asset: assets/fonts/PretendardVariable.ttf
