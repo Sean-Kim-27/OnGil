@@ -17,9 +17,9 @@ OnGil 백엔드 팀원들을 위한 개발 가이드입니다.
    ```
 
 2. **환경변수(`.env`) 세팅 🚨**
-   보안을 위해 DB 접속 정보는 깃허브에 올라가지 않습니다. 프로젝트 최상단에 `.env` 파일을 생성하고 아래 내용을 입력해 주세요. (실제 주소는 팀장에게 문의해 주세요.)
-   ```env
-   DATABASE_URL=주소
+   보안을 위해 실제 인증 정보는 깃허브에 올리지 않습니다. `.env.example`을 `.env`로 복사한 뒤 값을 채워 주세요. Google은 Android 클라이언트 ID가 아니라 백엔드의 audience로 사용할 **웹 애플리케이션 클라이언트 ID**를 입력합니다. 운영 환경에서는 `REDIS_URL`, `ALLOWED_HOSTS`, `FORCE_HTTPS=true`, `ENABLE_DOCS=false`도 설정해야 합니다.
+   ```bash
+   cp .env.example .env
    ```
 
 ---
@@ -69,7 +69,94 @@ class NewFeature(Base):
 
 ---
 
-## 3. 📦 프론트엔드 통신용 규격 작성 (`schemas.py`)
+## 3. 🔐 소셜 로그인 및 온길 세션
+
+`POST /api/v1/auth/social-login` 요청에는 공급자와 토큰을 명시합니다. Google은 ID token만, Kakao는 access token만 허용합니다.
+
+```json
+{
+  "provider": "google",
+  "token": "provider-token",
+  "device_id": "optional-device-id"
+}
+```
+
+응답의 온길 `access_token`은 API의 `Authorization: Bearer ...` 헤더에 사용하고, `refresh_token`은 앱의 안전한 저장소에 보관합니다. 갱신할 때마다 새 refresh token으로 교체해야 하며 이전 토큰을 재사용하면 해당 토큰 패밀리가 폐기됩니다.
+
+- `POST /api/v1/auth/refresh`: 온길 토큰 갱신
+- `POST /api/v1/auth/logout`: refresh token 패밀리 폐기
+- `GET /api/v1/auth/me`: 온길 access token 검증
+
+### 장소 주변 추천 데이터 조회
+
+국문관광정보서비스 환경변수를 설정하면 로그인한 사용자가 기준 장소 주변
+3~5km의 관광지, 문화시설, 숙박, 음식점, 카페 등 관광 데이터를 거리순으로
+통합 조회할 수 있습니다. 카카오 로컬 검색을 함께 설정하면 학교, 아파트,
+상가처럼 TourAPI에 없는 일반 장소도 기준점으로 사용할 수 있습니다.
+
+```dotenv
+KOR_SERVICE_BASE_URL=https://apis.data.go.kr/B551011/KorService2
+KOR_RELATE_BASE_URL=https://apis.data.go.kr/B551011/TarRlteTarService1
+KOR_DATA_API_KEY=발급받은_인증키
+KAKAO_REST_API_KEY=카카오디벨로퍼스_REST_API_키
+TOUR_API_PAGE_SIZE=1000
+```
+
+```http
+GET /api/v1/places/nearby?query=경복궁&radius_m=5000
+Authorization: Bearer <OnGil access token>
+```
+
+`KAKAO_REST_API_KEY`는 카카오 로그인 액세스 토큰이나 숫자 앱 ID가 아니라
+카카오디벨로퍼스 앱의 **REST API 키**입니다. 백엔드는 카카오 로컬 검색 결과의
+장소명, 지번·도로명 주소, 전체 카테고리를 함께 비교하여 기준점을 선택합니다.
+키가 없거나 카카오 검색이 실패하면 기존 TourAPI 키워드 검색으로 대체하지만,
+이 경우 일반 학교·아파트 검색은 제한될 수 있습니다.
+
+TourAPI `locationBasedList2`에는 `contentTypeId`를 전달하지 않아 모든 관광타입을
+한 결과로 요청합니다. `TOUR_API_PAGE_SIZE=1000`이면 결과가 1,000건 이하인
+지역은 주변 조회가 한 번의 원천 API 요청으로 끝나며, 초과하는 경우에만 다음
+페이지를 추가 요청합니다.
+
+nearby 결과의 한 장소를 눌렀을 때는 장소명과 좌표를 카카오 링크 조회 API에
+전달합니다. 백엔드는 해당 좌표 300m 안에서 이름이 일치하는 후보만 선택하며,
+카카오 장소 ID와 HTTPS 상세 페이지 링크를 반환합니다. 이 호출은 `places` 테이블에
+장소를 저장하지 않습니다.
+
+```http
+POST /api/v1/places/kakao-links/resolve
+Authorization: Bearer <OnGil access token>
+Content-Type: application/json
+
+{
+  "title": "국립민속박물관",
+  "latitude": 37.582,
+  "longitude": 126.979
+}
+```
+
+```json
+{
+  "kakao_place_id": "123456789",
+  "place_url": "https://place.map.kakao.com/123456789"
+}
+```
+
+응답의 `category`는 다음 온길 분류 중 하나입니다.
+
+- `restaurant`, `cafe`
+- `tourist_attraction`, `cultural_facility`
+- `festival`, `travel_course`, `leisure_sports`
+- `accommodation`, `shopping`, `other`
+
+카페는 TourAPI 분류체계의 `FD05`를 기준으로 음식점과 분리합니다. 캠핑·카라반·
+글램핑(`AC05`)은 원본 관광타입이 레포츠(28)이지만 온길 응답에서는 숙박으로
+분류합니다. 각 장소에는 원본 `content_type_id`도 포함됩니다. 연관관광지 정보를
+가져올 수 있으면 `related_rank`와 `related_category`가 함께 제공됩니다.
+
+---
+
+## 4. 📦 프론트엔드 통신용 규격 작성 (`schemas.py`)
 
 DB 테이블 세팅이 끝났다면, 클라이언트(앱)와 데이터를 안전하게 주고받기 위한 Pydantic DTO(Data Transfer Object)를 작성합니다.
 

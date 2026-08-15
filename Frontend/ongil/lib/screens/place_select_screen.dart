@@ -1,8 +1,21 @@
 import 'package:flutter/material.dart';
 import '../controllers/schedule_creation_controller.dart';
+<<<<<<< HEAD
 
 class PlaceSelectScreen extends StatefulWidget {
   const PlaceSelectScreen({super.key});
+=======
+import '../services/place_service.dart';
+import '../widgets/home_search_bar.dart';
+
+class PlaceSelectScreen extends StatefulWidget {
+  /// 홈/지도에서 검색해서 얻은 실제 추천 장소들. null이거나 비어있으면
+  /// 이 화면 자체에서 바로 검색할 수 있는 검색창을 보여줌(마지막으로 검색했던
+  /// 주소가 있으면 자동으로 한 번 더 불러옴). 예전처럼 충주 더미 데이터는 안 씀.
+  final List<RecommendedPlace>? places;
+
+  const PlaceSelectScreen({super.key, this.places});
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 
   @override
   State<PlaceSelectScreen> createState() => _PlaceSelectScreenState();
@@ -11,6 +24,7 @@ class PlaceSelectScreen extends StatefulWidget {
 class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
   final ScheduleCreationController _controller = ScheduleCreationController();
 
+<<<<<<< HEAD
   // 테스트용 더미 장소 데이터
   final List<Map<String, String>> _dummyPlaces = [
     {'id': 'p1', 'title': '탄금대 공원', 'sub': '충주 대표 명소 · 도보 10분'},
@@ -18,21 +32,100 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
     {'id': 'p3', 'title': '활옥동굴', 'sub': '신비로운 동굴 카약 체험'},
     {'id': 'p4', 'title': '수주팔봉', 'sub': '차박과 차크닉의 성지'},
   ];
+=======
+  // ScheduleCreationController의 스텝(1~4: 명소/숙소/카페/식당)을 PlaceService가
+  // 매기는 카테고리 라벨(관광/숙박/카페/음식)에 매핑함.
+  static const Map<int, String> _stepToCategory = {
+    1: '관광',
+    2: '숙박',
+    3: '카페',
+    4: '음식',
+  };
+
+  // 🐛 버그 수정: 예전엔 widget.places를 그대로 읽기만 하는 getter라서, 홈/지도를
+  // 거치지 않고(예: 스케줄 탭의 '+ 새로운 스케줄 만들기'처럼 인자 없이) 이 화면에
+  // 들어오면 "먼저 검색해주세요" 안내만 보여줄 뿐 정작 이 화면 자체에서는 검색할
+  // 방법이 없었음. places를 로컬 state로 바꿔서 이 화면에서 직접 검색해 채울 수
+  // 있게 함(홈 화면 검색과 동일한 PlaceService.fetchNearbyPlaces 사용).
+  late List<RecommendedPlace> _places;
+  final TextEditingController _searchCtrl = TextEditingController();
+  bool _isSearching = false;
+
+  List<RecommendedPlace> get _allPlaces => _places;
+
+  List<RecommendedPlace> get _currentStepPlaces {
+    final category = _stepToCategory[_controller.currentStep];
+    return _allPlaces.where((p) => p.category == category).toList();
+  }
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 
   @override
   void initState() {
     super.initState();
+<<<<<<< HEAD
     _controller.addListener(() {
       setState(() {});
     });
+=======
+    _places = widget.places ?? [];
+    _controller.addListener(() {
+      setState(() {});
+    });
+    // places 없이 들어온 경우, 홈 화면처럼 마지막으로 검색했던 주소가 있으면
+    // 그 기준으로 한 번 더 자동 조회해줌 (완전히 빈 화면으로 시작하지 않도록).
+    if (_places.isEmpty) {
+      _restoreLastAddress();
+    }
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
   }
 
   @override
   void dispose() {
     _controller.dispose();
+<<<<<<< HEAD
     super.dispose();
   }
 
+=======
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _restoreLastAddress() async {
+    final address = await PlaceService.instance.getLastAddress();
+    if (address == null || address.isEmpty || !mounted) return;
+    _searchCtrl.text = address;
+    _search(address);
+  }
+
+  // 홈 화면(_searchAddress)과 동일한 로직: 주소로 근처 추천 장소를 조회해서
+  // 이 화면의 4단계 선택 리스트를 바로 채움.
+  Future<void> _search(String address) async {
+    final trimmed = address.trim();
+    if (trimmed.isEmpty) return;
+
+    setState(() => _isSearching = true);
+    await PlaceService.instance.saveLastAddress(trimmed);
+    final result = await PlaceService.instance.fetchNearbyPlaces(trimmed);
+    if (!mounted) return;
+
+    setState(() {
+      _places = result?.places ?? [];
+      _isSearching = false;
+    });
+
+    if (result == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('검색에 실패했어요. 다시 시도해주세요')),
+      );
+    } else if (result.places.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("'$trimmed' 근처 추천 장소를 찾지 못했어요")),
+      );
+    }
+  }
+
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
   @override
   Widget build(BuildContext context) {
     const primaryColor = Color(0xFFC85A32);
@@ -105,6 +198,7 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
 
             // 장소 선택 리스트 영역
             Expanded(
+<<<<<<< HEAD
               child: ListView.builder(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 itemCount: _dummyPlaces.length,
@@ -168,6 +262,83 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
                   );
                 },
               ),
+=======
+              child: _allPlaces.isEmpty
+                  ? _buildSearchEmptyState()
+                  : _currentStepPlaces.isEmpty
+                      ? _buildEmptyState(
+                          icon: Icons.location_off_outlined,
+                          title: '이 근처엔 ${_controller.stepTitles[_controller.currentStep]} 추천 장소가 없어요',
+                          subtitle: '다음 단계로 넘어가거나 다른 지역으로 다시 검색해보세요',
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                          itemCount: _currentStepPlaces.length,
+                          itemBuilder: (context, index) {
+                            final place = _currentStepPlaces[index];
+                            final isSelected = _controller.currentStepSelectedIds.contains(place.title);
+
+                            return GestureDetector(
+                              onTap: () => _controller.togglePlaceSelection(place.title),
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: isSelected ? primaryColor : const Color(0xFFEFEBE4),
+                                    width: isSelected ? 2 : 1,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.03),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            place.title,
+                                            style: const TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFF2C2825),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            place.address.isNotEmpty
+                                                ? place.address
+                                                : (place.tags.isNotEmpty ? place.tags.first : ''),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              color: Color(0xFF8A827A),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Icon(
+                                      isSelected ? Icons.check_circle : Icons.add_circle_outline,
+                                      color: isSelected ? primaryColor : const Color(0xFFACACAC),
+                                      size: 26,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
             ),
 
             // 하단 버튼 (4단계 완료 시 바로 ai_schedule_working으로 전환)
@@ -187,6 +358,7 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
                         return;
                       }
 
+<<<<<<< HEAD
                       // 백엔드 요청을 보내면서 'AI 로딩 화면'으로 즉시 전환!
                       final selectedIds = _controller.getAllSelectedPlaceIds;
                       
@@ -195,6 +367,19 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
                           context, 
                           '/ai_working',
                           arguments: selectedIds, // 선택한 장소 데이터 전달
+=======
+                      // 선택한 장소 '제목'들을 실제 RecommendedPlace 객체로 다시 매칭해서
+                      // (좌표/카테고리 등 상세 정보까지) AI 로딩 화면으로 통째로 넘겨줌.
+                      final selectedTitles = _controller.getAllSelectedPlaceIds.toSet();
+                      final selectedPlaces =
+                          _allPlaces.where((p) => selectedTitles.contains(p.title)).toList();
+
+                      if (context.mounted) {
+                        Navigator.pushReplacementNamed(
+                          context,
+                          '/ai_working',
+                          arguments: selectedPlaces,
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
                         );
                       }
                     }
@@ -222,4 +407,67 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
       ),
     );
   }
+<<<<<<< HEAD
 }
+=======
+
+  // '먼저 검색해주세요'로 막다른 길이던 화면 대신, 이 화면에서 바로 검색까지
+  // 끝낼 수 있게 검색창 + 안내 문구를 함께 보여줌.
+  Widget _buildSearchEmptyState() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          HomeSearchBar(controller: _searchCtrl, onSubmitted: _search),
+          if (_isSearching) ...[
+            const SizedBox(height: 10),
+            const LinearProgressIndicator(
+              minHeight: 2,
+              color: Color(0xFFC85A32),
+              backgroundColor: Color(0xFFEFEBE4),
+            ),
+          ],
+          Expanded(
+            child: _buildEmptyState(
+              icon: Icons.search_off_rounded,
+              title: '가고 싶은 동네를 검색해주세요',
+              subtitle: '동네나 학교 이름으로 검색하면\n근처 실제 추천 장소가 여기 떠요',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState({required IconData icon, required String title, required String subtitle}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 40, color: const Color(0xFFACACAC)),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF2C2825),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, color: Color(0xFF8A827A), height: 1.4),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210

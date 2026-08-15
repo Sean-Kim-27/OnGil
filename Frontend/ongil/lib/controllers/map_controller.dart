@@ -8,6 +8,10 @@ import 'dart:ui' as ui;
 import 'dart:typed_data';
 import '../services/kakao_api_service.dart';
 import '../services/schedule_api_service.dart';
+<<<<<<< HEAD
+=======
+import '../services/api_service.dart';
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 
 class MapController extends ChangeNotifier {
   Map<String, dynamic>? selectedPlaceDetail;
@@ -19,6 +23,12 @@ class MapController extends ChangeNotifier {
   LatLng currentCenter = LatLng(37.5776, 126.9768);
   String selectedLocationName = '경복궁'; // 기준 위치 이름
   String transportType = '도보';
+<<<<<<< HEAD
+=======
+  bool isLoadingSchedule = false;
+  // null: 아직 스케줄을 만든 적이 없음(온보딩 메시지) / 값 있음: 조회를 시도했었음(실패 시 에러+재시도)
+  String? lastAttemptedScheduleId;
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 
   Set<Marker> markers = {};
   Set<Polyline> polylines = {};
@@ -66,6 +76,18 @@ class MapController extends ChangeNotifier {
     _kakaoMapController?.setCenter(latLng);
   }
 
+<<<<<<< HEAD
+=======
+  // 홈 화면 등 다른 곳에서 이미 검색해서 얻은 위치(이름+좌표)로 지도를 바로 이동시킴.
+  // searchAndMoveLocation처럼 카카오 API를 다시 부르지 않고 좌표를 바로 씀.
+  void moveToAnchor(String name, LatLng latLng) {
+    currentCenter = latLng;
+    selectedLocationName = name;
+    _kakaoMapController?.setCenter(latLng);
+    notifyListeners();
+  }
+
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
   // 🔍 마커 클릭 시 카카오 상세 정보 가져오기
   Future<void> fetchPlaceDetail(String placeName, LatLng latLng) async {
     isLoadingPlaceDetail = true;
@@ -147,10 +169,21 @@ class MapController extends ChangeNotifier {
 
   // 📡 실제 백엔드 스케줄 API 연동 및 자동 그리기
   Future<void> fetchAndDrawSchedule(int scheduleId) async {
+<<<<<<< HEAD
+=======
+    isLoadingSchedule = true;
+    lastAttemptedScheduleId = '$scheduleId';
+    notifyListeners();
+
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
     final data = await ScheduleApiService.fetchScheduleDetail(scheduleId);
 
     if (data == null) {
       debugPrint('⚠️ 일정 데이터를 불러오지 못했습니다.');
+<<<<<<< HEAD
+=======
+      isLoadingSchedule = false;
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
       notifyListeners();
       return;
     }
@@ -168,14 +201,38 @@ class MapController extends ChangeNotifier {
         placesJson.map((item) => ScheduleItem.fromJson(item)).toList()
           ..sort((a, b) => a.visitOrder.compareTo(b.visitOrder));
 
+<<<<<<< HEAD
+=======
+    isLoadingSchedule = false;
+
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
     if (scheduleList.isNotEmpty) {
       List<LatLng> points = scheduleList
           .map((item) => LatLng(item.latitude, item.longitude))
           .toList();
       await drawScheduleRoute(points);
+<<<<<<< HEAD
     }
   }
 
+=======
+    } else {
+      notifyListeners();
+    }
+  }
+
+  // 가장 최근에 AI로 생성한 스케줄(있다면)을 불러와서 지도에 그려줌.
+  // 아직 만든 스케줄이 없으면 lastAttemptedScheduleId가 null로 남아있어서
+  // 화면에서 '아직 스케줄이 없어요' 안내(에러 아님)로 구분해서 보여줄 수 있음.
+  Future<void> fetchAndDrawLastSchedule() async {
+    final lastId = await ApiService.getLastScheduleId();
+    if (lastId == null) return;
+    final id = int.tryParse(lastId);
+    if (id == null) return;
+    await fetchAndDrawSchedule(id);
+  }
+
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
   // 🚗 길찾기 경로 및 마커 생성
   Future<void> drawScheduleRoute(List<LatLng> schedulePoints) async {
     if (schedulePoints.isEmpty) return;

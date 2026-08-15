@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+<<<<<<< HEAD
 import '../services/api_service.dart';
+=======
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 
 class ScheduleCreationController extends ChangeNotifier {
   int currentStep = 1; // 1: 명소, 2: 숙소, 3: 카페, 4: 식당
@@ -70,6 +73,7 @@ class ScheduleCreationController extends ChangeNotifier {
     return allIds;
   }
 
+<<<<<<< HEAD
   Future<Map<String, dynamic>?> submitSchedule() async {
     isLoading = true;
     notifyListeners();
@@ -86,4 +90,7 @@ class ScheduleCreationController extends ChangeNotifier {
       return null;
     }
   }
+=======
+
+>>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 }
