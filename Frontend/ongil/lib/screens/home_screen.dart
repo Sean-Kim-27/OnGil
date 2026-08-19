@@ -1,7 +1,21 @@
 import 'package:flutter/material.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_dimens.dart';
+import '../theme/app_text_styles.dart';
+import '../widgets/bottom_nav_bar.dart';
 import '../widgets/top_header.dart';
+import '../widgets/home_search_bar.dart';
 import '../widgets/main_feature_card.dart';
 import '../widgets/quick_action_cards.dart';
+import '../widgets/recommendation_card.dart';
+import '../widgets/kakao_webview_screen.dart';
+import '../services/auth_service.dart';
+import '../services/place_service.dart';
+import 'settings_screen.dart';
+import 'recommendation_list_screen.dart';
+import 'schedule_list_screen.dart';
+import 'map_screen.dart';
+import 'guestbook_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -11,155 +25,278 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // 현재 선택된 하단 탭 인덱스 (0: 지도, 1: 스케줄, 2: 홈, 3: 방명록, 4: 설정)
-  int _selectedIndex = 2; 
+  int _navIndex = 2; // '홈' 탭이 기본 선택 (0:지도 1:스케줄 2:홈 3:방명록 4:설정)
+  String? _nickname;
 
-  // 테마 색상 상수로 정의
-  static const Color primaryColor = Color(0xFFC85A32); // 온길 주황색
-  static const Color bgColor = Color(0xFFFAF7F2);      // 크림 배경색
+  final _addressCtrl = TextEditingController();
+  bool _isSearching = false;
+  NearbySearchResult? _searchResult;
+
+  List<RecommendedPlace> get _places => _searchResult?.places ?? [];
+
+  // 검색 전(또는 검색 결과가 비었을 때) 보여줄 예시 데이터.
+  static const _fallbackRecommendations = [
+    (
+      tag: '충주 · 1998',
+      title: '탄금대 · 충주',
+      subtitle: '모교 앞 골목',
+      accentColor: AppColors.accent,
+    ),
+    (
+      tag: '충주 · 2001',
+      title: '대소원면 문구점',
+      subtitle: '초등학교 앞 거리',
+      accentColor: AppColors.brand,
+    ),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _checkSession();
+    _loadProfile();
+    _restoreLastAddress();
+  }
+
+  @override
+  void dispose() {
+    _addressCtrl.dispose();
+    super.dispose();
+  }
+
+  // 로그인 세션이 없으면 홈 진입 즉시 로그인 화면으로 되돌려보냄.
+  Future<void> _checkSession() async {
+    final hasSession = await AuthService.instance.hasSession();
+    if (!hasSession && mounted) {
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+    }
+  }
+
+  Future<void> _loadProfile() async {
+    final nickname = await AuthService.instance.getNickname();
+    if (mounted) setState(() => _nickname = nickname);
+  }
+
+  // 이전에 검색했던 주소가 있으면 검색창에 채워두고 그 기준으로 다시 조회함.
+  Future<void> _restoreLastAddress() async {
+    final address = await PlaceService.instance.getLastAddress();
+    if (address == null || address.isEmpty || !mounted) return;
+    _addressCtrl.text = address;
+    _searchAddress(address);
+  }
+
+  // 주소(기준 장소명)를 저장하고, 그 기준 근처 추천 장소를 가져와 추천리스트/메인 카드에 반영함.
+  Future<void> _searchAddress(String address) async {
+    final trimmed = address.trim();
+    if (trimmed.isEmpty) return;
+
+    setState(() => _isSearching = true);
+    await PlaceService.instance.saveLastAddress(trimmed);
+    final result = await PlaceService.instance.fetchNearbyPlaces(trimmed);
+    if (!mounted) return;
+
+    setState(() {
+      _searchResult = result;
+      _isSearching = false;
+    });
+
+    if (result == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('검색에 실패했어요. 다시 시도해주세요')),
+      );
+    } else if (result.places.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("'$trimmed' 근처 추천 장소를 찾지 못했어요")),
+      );
+    }
+  }
+
+  // 설정 화면으로 이동하고, 복귀 시 하단 탭을 '홈'으로 되돌리며 프로필을 새로고침함.
+  void _openSettings() {
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const SettingsScreen()))
+        .then((_) {
+      if (!mounted) return;
+      setState(() => _navIndex = 2);
+      _loadProfile();
+    });
+  }
+
+  void _openRecommendationList() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => RecommendationListScreen(searchResult: _searchResult)),
+    );
+  }
+
+  // 하단 탭에 따라 몸통 내용을 바꿔줌. 홈에서 검색한 결과(_searchResult)를 지도 탭에도
+  // 넘겨줘서, 홈에서 '부산역'을 검색했으면 지도도 그 근처로 이동하고 스케줄링도 그
+  // 근처 실제 장소들로 시작하게 함.
+  Widget _buildTabBody(BuildContext context) {
+    switch (_navIndex) {
+      case 0:
+        return MapScreen(searchResult: _searchResult);
+      case 1:
+        return const ScheduleListScreen();
+      case 3:
+        return const GuestbookScreen();
+      case 2:
+      default:
+        return _buildHomeContent(context);
+    }
+  }
+
+  Widget _buildHomeContent(BuildContext context) {
+    final anchor = _searchResult?.anchor;
+    // 홈 화면 가로 목록은 이제 카테고리로 거르지 않고 전체를 보여줌 (필터는 추천 리스트 화면에서).
+    final displayPlaces = _places;
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.screenHorizontal,
+        ),
+        child: Column(
+          children: [
+            const SizedBox(height: 6),
+            TopHeader(onSettingsTap: _openSettings),
+            const SizedBox(height: AppSpacing.sectionGap),
+            _GreetingSection(nickname: _nickname),
+            const SizedBox(height: AppSpacing.sectionGap),
+            HomeSearchBar(controller: _addressCtrl, onSubmitted: _searchAddress),
+            if (_isSearching) ...[
+              const SizedBox(height: 10),
+              const LinearProgressIndicator(
+                minHeight: 2,
+                color: AppColors.accent,
+                backgroundColor: AppColors.line,
+              ),
+            ],
+            const SizedBox(height: AppSpacing.sectionGap),
+            MainFeatureCard(
+              tag: anchor?.title,
+              title: anchor != null ? '${anchor.title}, 지금은\n어떤 모습일까요' : null,
+              subtitle: anchor != null
+                  ? (_places.isNotEmpty
+                      ? '반경 5km 안에서 추천 장소 ${_places.length}곳을 찾았어요'
+                      : '근처 추천 장소를 찾지 못했어요')
+                  : null,
+              image: _searchResult?.heroImage,
+            ),
+            const SizedBox(height: AppSpacing.cardGap),
+            QuickActionCards(
+              onMapTap: () => setState(() => _navIndex = 0),
+              onScheduleTap: () => setState(() => _navIndex = 1),
+            ),
+            const SizedBox(height: AppSpacing.sectionGap),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('추천리스트', style: AppTextStyles.cardTitle),
+                GestureDetector(
+                  onTap: _openRecommendationList,
+                  child: Text(
+                    '더보기',
+                    style: AppTextStyles.caption.copyWith(
+                      color: AppColors.accent,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 222,
+              child: displayPlaces.isNotEmpty
+                  ? ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      clipBehavior: Clip.none,
+                      itemCount: displayPlaces.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.cardGap),
+                      itemBuilder: (context, i) {
+                        final place = displayPlaces[i];
+                        return RecommendationCard(
+                          tag: place.tags.isNotEmpty ? place.tags.first : place.category,
+                          title: place.title,
+                          subtitle: place.address,
+                          accentColor: i.isEven ? AppColors.accent : AppColors.brand,
+                          image: place.imageUrl != null ? NetworkImage(place.imageUrl!) : null,
+                          onTap: () => openKakaoPlaceDetail(
+                            context,
+                            title: place.title,
+                            latitude: place.latitude,
+                            longitude: place.longitude,
+                          ),
+                        );
+                      },
+                    )
+                  : ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      clipBehavior: Clip.none,
+                      itemCount: _fallbackRecommendations.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.cardGap),
+                      itemBuilder: (context, i) {
+                        final item = _fallbackRecommendations[i];
+                        return RecommendationCard(
+                          tag: item.tag,
+                          title: item.title,
+                          subtitle: item.subtitle,
+                          accentColor: item.accentColor,
+                        );
+                      },
+                    ),
+            ),
+            const SizedBox(height: 100),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: bgColor,
-      
-      // 1. 메인 컨텐츠 영역 (스크롤 가능하게 SingleChildScrollView로 감쌈)
-      body: SafeArea(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Column(
-              children: const [
-                TopHeader(),             // 1) 상단 로고 & 아이콘
-                SizedBox(height: 20),
-                _GreetingSection(),      // 2) 환영 문구 (아래 분리)
-                SizedBox(height: 24),
-                MainFeatureCard(),       // 3) 메인 추억 카드
-                SizedBox(height: 16),
-                QuickActionCards(),      // 4) 하단 퀵 링크 2개
-                SizedBox(height: 20),
-              ],
-            ),
-          ),
-        ),
-      ),
-
-      // 2. 우측 하단 주황색 플러스(+) 플로팅 버튼
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 8.0, right: 8.0),
-        child: FloatingActionButton(
-          onPressed: () {
-            print('플러스 버튼 클릭됨!');
-          },
-          backgroundColor: primaryColor,
-          elevation: 4,
-          shape: const CircleBorder(), // 완전한 동그라미 모양
-          child: const Icon(Icons.add, color: Colors.white, size: 28),
-        ),
-      ),
-
-      // 3. 하단 5개 탭 네비게이션 바
-      bottomNavigationBar: _buildBottomNavigationBar(),
-    );
-  }
-
-  // 하단 네비게이션 바 생성 함수
-  Widget _buildBottomNavigationBar() {
-    return Container(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0xFFEFEBE4), width: 1)),
-      ),
-      child: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (index) {
-          setState(() {
-            _selectedIndex = index; // 탭 클릭 시 상태 변경 & 화면 새로고침!
-          });
+      backgroundColor: AppColors.background,
+      body: _buildTabBody(context),
+      bottomNavigationBar: AppBottomNavBar(
+        currentIndex: _navIndex,
+        onTap: (i) {
+          if (i == 4) {
+            // '설정' 탭
+            _openSettings();
+          } else {
+            setState(() => _navIndex = i);
+          }
         },
-        type: BottomNavigationBarType.fixed, // 탭 5개 이상일 때 모양 유지
-        backgroundColor: bgColor,
-        selectedItemColor: primaryColor,
-        unselectedItemColor: Colors.grey[500],
-        selectedFontSize: 11,
-        unselectedFontSize: 11,
-        elevation: 0,
-        items: [
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.map_outlined),
-            activeIcon: Icon(Icons.map),
-            label: '지도',
-          ),
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.alt_route_outlined),
-            activeIcon: Icon(Icons.alt_route),
-            label: '스케줄',
-          ),
-          BottomNavigationBarItem(
-            icon: Column(
-              children: [
-                const Icon(Icons.home_outlined),
-                if (_selectedIndex == 2)
-                  Container(
-                    margin: const EdgeInsets.only(top: 2),
-                    width: 4,
-                    height: 4,
-                    decoration: const BoxDecoration(
-                      color: primaryColor,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-              ],
-            ),
-            activeIcon: const Icon(Icons.home_filled, color: primaryColor),
-            label: '홈',
-          ),
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.menu_book_outlined),
-            activeIcon: Icon(Icons.menu_book),
-            label: '방명록',
-          ),
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.settings_outlined),
-            activeIcon: Icon(Icons.settings),
-            label: '설정',
-          ),
-        ],
       ),
     );
   }
 }
 
-// 환영 문구 영역만 작게 분리한 위젯
+/// 인사말 영역. 닉네임은 회원가입 때 저장한 값을 보여주고, 없으면 '회원'으로 대체함.
 class _GreetingSection extends StatelessWidget {
-  const _GreetingSection();
+  final String? nickname;
+  const _GreetingSection({this.nickname});
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        children: const [
-          Text(
-            'WELCOME BACK',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFFC39B6B),
-              letterSpacing: 1.2,
-            ),
+    return Column(
+      children: [
+        Text(
+          'WELCOME BACK',
+          style: AppTextStyles.caption.copyWith(
+            color: AppColors.brandMuted,
+            letterSpacing: 1.2,
+            fontWeight: FontWeight.w700,
           ),
-          SizedBox(height: 8),
-          Text(
-            '도현님, 오늘도\n추억 속을 걸어보세요',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFF2C2825),
-              height: 1.35,
-            ),
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '${nickname ?? '회원'}님, 오늘도\n추억 속을 걸어보세요',
+          textAlign: TextAlign.center,
+          style: AppTextStyles.heroGreeting,
+        ),
+      ],
     );
   }
 }
