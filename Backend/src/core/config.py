@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     GOOGLE_CLIENT_ID: str = Field(min_length=10)
     KAKAO_APP_ID: int = Field(gt=0)
+    KAKAO_REST_API_KEY: str | None = None
     JWT_SECRET_KEY: SecretStr = Field(min_length=32)
 
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, ge=5, le=60)
@@ -25,10 +26,13 @@ class Settings(BaseSettings):
     KOR_SERVICE_BASE_URL: str | None = None
     KOR_RELATE_BASE_URL: str | None = None
     KOR_DATA_API_KEY: SecretStr | None = None
-    KAKAO_REST_API_KEY: SecretStr | None = None
     TOUR_API_TIMEOUT_SECONDS: float = Field(default=8.0, gt=0, le=30)
     TOUR_API_PAGE_SIZE: int = Field(default=1000, ge=10, le=1000)
     TOUR_API_MAX_RESULTS_PER_CATEGORY: int = Field(default=2000, ge=100, le=10000)
+
+    MAX_PHOTO_UPLOAD_BYTES: int = Field(default=8 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
+    UPLOADS_ROOT_DIR: str = "uploads"
+    MEDIA_BASE_URL: str = "/media"
 
     REDIS_URL: str | None = None
     ENVIRONMENT: str = "development"
