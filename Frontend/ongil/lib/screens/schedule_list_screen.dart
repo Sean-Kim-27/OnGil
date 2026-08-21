@@ -107,32 +107,11 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                       child: CircularProgressIndicator(color: primaryColor),
                     )
                   : _controller.schedules.isEmpty
-                      ? Center(
-                          child: _controller.errorMessage != null
-                              ? Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      _controller.errorMessage!,
-                                      style: const TextStyle(color: Color(0xFF8A827A)),
-                                    ),
-                                    const SizedBox(height: 12),
-                                    TextButton(
-                                      onPressed: () => _controller.fetchSchedules(),
-                                      child: const Text(
-                                        '다시 시도',
-                                        style: TextStyle(
-                                          color: primaryColor,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                )
-                              : const Text(
-                                  '아직 저장된 스케줄이 없어요.',
-                                  style: TextStyle(color: Color(0xFF8A827A)),
-                                ),
+                      ? const Center(
+                          child: Text(
+                            '아직 저장된 스케줄이 없어요.',
+                            style: TextStyle(color: Color(0xFF8A827A)),
+                          ),
                         )
                       : RefreshIndicator(
                           color: primaryColor,
