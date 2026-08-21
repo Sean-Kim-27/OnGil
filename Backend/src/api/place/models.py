@@ -1,6 +1,16 @@
 import enum
 
-from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -28,6 +38,11 @@ class RewardType(str, enum.Enum):
 class RewardStatus(str, enum.Enum):
     PENDING = "PENDING"
     ISSUED = "ISSUED"
+
+
+class PhotoType(str, enum.Enum):
+    CURRENT = "CURRENT"  # 방문 당시 촬영한 현재 사진
+    PAST = "PAST"        # 사용자가 갖고 있던 과거 사진 (CURRENT가 있어야 등록 가능)
 
 
 class Place(Base):
@@ -61,19 +76,25 @@ class MemoryPlace(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
-# 2. 옛날 사진 제출 및 보상 처리 아카이브
+# 2. 옛날/현재 사진 제출 및 보상 처리 아카이브
+# 방명록(Guestbook) 하나에 최대 2장까지 붙을 수 있음: CURRENT 1장 + PAST 1장.
+# PAST는 반드시 같은 guestbook에 CURRENT가 이미 있어야 등록 가능 (service.py에서 검증).
 class ArchivePhoto(Base):
     __tablename__ = "archive_photos"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    place_id = Column(Integer, ForeignKey("places.id"), nullable=False)
+    guestbook_id = Column(
+        Integer, ForeignKey("guestbooks.id", ondelete="CASCADE"), nullable=False
+    )
+    photo_type = Column(Enum(PhotoType, native_enum=False, length=20), nullable=False)
 
     image_url = Column(String(255), nullable=False, comment="원본 사진 URL")
     mosaic_image_url = Column(
         String(255), nullable=True, comment="모자이크 처리된 사진 URL"
     )
-    taken_year = Column(Integer, nullable=False, comment="사진 찍힌 연도 (ex: 1998)")
+    taken_year = Column(
+        Integer, nullable=True, comment="과거(PAST) 사진일 때만 사용. 현재 사진은 불필요"
+    )
 
     mosaic_status = Column(
         Enum(MosaicStatus, native_enum=False, length=50),
@@ -103,4 +124,10 @@ class ArchivePhoto(Base):
     )
 
     # 관계 설정
-    place = relationship("Place")
+    guestbook = relationship("Guestbook", back_populates="photos")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "guestbook_id", "photo_type", name="uq_archive_photo_guestbook_type"
+        ),
+    )
