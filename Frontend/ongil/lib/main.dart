@@ -1,23 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-<<<<<<< HEAD
-import 'package:kakao_map_plugin/kakao_map_plugin.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart'; // 👈 추가
-
-// 전체 스크린 파일들 import
-import 'screens/schedule_list_screen.dart';
-import 'screens/place_select_screen.dart';
-import 'screens/ai_schedule_working.dart';
-import 'screens/schedule_detail_screen.dart';
-import 'screens/home_screen.dart';
-
-void main() async {
-  debugPrint('앱 시작!'); // 앱 시작 시 콘솔에 로그 찍기
-  WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: ".env");
-
-  // 상단 상태바 투명화 설정
-=======
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:kakao_flutter_sdk_common/kakao_flutter_sdk_common.dart';
 import 'package:kakao_map_plugin/kakao_map_plugin.dart';
@@ -53,24 +35,18 @@ void main() async {
   await dotenv.load(fileName: '.env', isOptional: true);
 
   // 상단 상태바 투명화 (도현님 쪽 디자인 반영)
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.dark,
     ),
   );
-<<<<<<< HEAD
-  AuthRepository.initialize(appKey: '89ffb7fc95646374f10f4e7b942677ed'); // 카카오맵 플러그인 초기화
-  runApp(const MyApp());
-=======
 
   KakaoSdk.init(nativeAppKey: kKakaoNativeAppKey);
   AuthRepository.initialize(appKey: kKakaoMapAppKey); // 카카오맵 플러그인(지도 렌더링) 초기화
   await AuthService.instance.initializeGoogle(serverClientId: kGoogleServerClientId);
 
   runApp(const OngilApp());
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
 }
 
 class OngilApp extends StatelessWidget {
@@ -81,25 +57,6 @@ class OngilApp extends StatelessWidget {
     return MaterialApp(
       title: '온길',
       debugShowCheckedModeBanner: false,
-<<<<<<< HEAD
-      theme: ThemeData(
-        scaffoldBackgroundColor: const Color(0xFFFAF7F2),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFC85A32),
-          primary: const Color(0xFFC85A32),
-        ),
-        useMaterial3: true,
-      ),
-      // 1. 앱을 켜면 제일 먼저 홈 화면이 떠!
-      home: const HomeScreen(),
-      
-      // 2. 앱 내 전체 화면 이동 경로(Route) 정의
-      routes: {
-        '/schedule_list': (context) => const ScheduleListScreen(),
-        '/place_select': (context) => const PlaceSelectScreen(),
-        '/ai_working': (context) => const AiScheduleWorking(),
-        '/schedule_detail': (context) => ScheduleDetailScreen(scheduleId: ModalRoute.of(context)!.settings.arguments as String),
-=======
       theme: AppTheme.light,
       // 서비스 레이어에서 강제 로그아웃 시 쓰는 키
       navigatorKey: rootNavigatorKey,
@@ -120,7 +77,6 @@ class OngilApp extends StatelessWidget {
       },
       builder: (context, child) {
         return ResponsiveMobileFrame(child: child ?? const SizedBox.shrink());
->>>>>>> 181b2e02e01fc09c9df58fdd7b41b573330de210
       },
     );
   }
