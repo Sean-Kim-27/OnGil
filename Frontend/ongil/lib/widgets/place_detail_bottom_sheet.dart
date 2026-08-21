@@ -74,7 +74,7 @@ class PlaceDetailBottomSheet extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFC85A32).withOpacity(0.1),
+                      color: const Color(0xFFC85A32).withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
@@ -110,7 +110,7 @@ class PlaceDetailBottomSheet extends StatelessWidget {
                       const Icon(Icons.phone_outlined, size: 18, color: Colors.grey),
                       const SizedBox(width: 6),
                       Text(
-                        detail!['phone'],
+                        detail['phone'] as String,
                         style: TextStyle(color: Colors.grey[700], fontSize: 14),
                       ),
                     ],

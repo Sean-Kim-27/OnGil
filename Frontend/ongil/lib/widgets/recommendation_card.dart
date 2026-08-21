@@ -39,7 +39,7 @@ class RecommendationCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.cardBackground,
           borderRadius: BorderRadius.circular(AppRadius.cardHero),
-          border: Border.all(color: accentColor.withOpacity(0.18)),
+          border: Border.all(color: accentColor.withValues(alpha: 0.18)),
           boxShadow: AppShadows.card,
         ),
         child: Column(
@@ -51,7 +51,7 @@ class RecommendationCard extends StatelessWidget {
                 children: [
                   MemoryPhotoHero(
                     image: image,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.cardHero)),
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(AppRadius.cardHero)),
                   ),
                   Positioned(
                     bottom: 10,
@@ -59,7 +59,7 @@ class RecommendationCard extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                       decoration: BoxDecoration(
-                        color: AppColors.cardBackground.withOpacity(0.65),
+                        color: AppColors.cardBackground.withValues(alpha: 0.65),
                         borderRadius: BorderRadius.circular(AppRadius.pill),
                         border: Border.all(color: accentColor, width: 1.1),
                       ),

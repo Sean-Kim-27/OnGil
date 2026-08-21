@@ -3,16 +3,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'app_colors.dart';
 
 /// 온길 디자인 시스템 - 타이포그래피 토큰
-
-/// 폰트 사용 규칙 (스펙 그대로):
-/// - Gowun Batang(세리프)  → 로고, 화면 히어로 타이틀, 히어로 카피에만 사용
-/// - Pretendard Variable   → 나머지 UI 전체 (본문, 카드 제목, 캡션, 버튼 등)
 ///
-/// flutter:
-///   fonts:
-///     - family: Pretendard
-///       fonts:
-///         - asset: assets/fonts/PretendardVariable.ttf
+/// Gowun Batang(세리프)는 로고·히어로 전용, 나머지 UI는 Pretendard.
 class AppTextStyles {
   AppTextStyles._();
 

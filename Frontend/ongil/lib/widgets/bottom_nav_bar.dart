@@ -74,7 +74,7 @@ class AppFab extends StatelessWidget {
         shape: BoxShape.circle,
         boxShadow: [
           BoxShadow(
-            color: AppColors.accent.withOpacity(0.35),
+            color: AppColors.accent.withValues(alpha: 0.35),
             blurRadius: 20,
             offset: const Offset(0, 10),
           ),

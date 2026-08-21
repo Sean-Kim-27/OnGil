@@ -1,54 +1,78 @@
-import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import 'package:flutter/foundation.dart';
+import '../models/schedule.dart';
+import '../services/schedule_api_service.dart';
 
+/// 여정 목록 화면 상태.
 class ScheduleListController extends ChangeNotifier {
-  List<dynamic> schedules = [];
+  List<ScheduleSummary> schedules = [];
   bool isLoading = false;
-  String? errorMessage;
+  ScheduleApiException? error;
 
-  // 1. 내 스케줄 목록 불러오기 (GET)
-  Future<void> fetchSchedules() async {
-    isLoading = true;
-    errorMessage = null;
-    notifyListeners();
+  bool _disposed = false;
+
+  bool get hasError => error != null;
+  bool get isEmpty => !isLoading && !hasError && schedules.isEmpty;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  /// 목록 새로고침. [silent]면 스피너 없이 갱신.
+  Future<void> fetchSchedules({bool silent = false}) async {
+    if (!silent) {
+      isLoading = true;
+      error = null;
+      _notify();
+    }
 
     try {
-      final data = await ApiService.fetchSchedules(); // 기존 ApiService 연결
-      schedules = data;
+      schedules = await ScheduleApiService.fetchSchedules();
+      error = null;
+    } on ScheduleApiException catch (e) {
+      // 조용한 새로고침 실패 시엔 보던 목록을 그대로 유지.
+      if (!silent || schedules.isEmpty) {
+        error = e;
+      }
+    } catch (e, st) {
+      debugPrint('💥 [ScheduleListController] 예상 못 한 오류: $e\n$st');
+      error = const ScheduleApiException(ScheduleApiErrorKind.parse);
+    } finally {
       isLoading = false;
-      notifyListeners();
-    } catch (e) {
-      isLoading = false;
-      errorMessage = '스케줄 목록을 불러오는 데 실패했어요.';
-      // 🐛 버그 수정: notifyListeners()가 주석 처리돼 있어서 실패해도 화면이
-      // isLoading=true인 채로 멈춰있었음 (로딩 스피너가 영원히 안 사라짐).
-      notifyListeners();
+      _notify();
     }
   }
 
-  // 2. 스케줄 삭제 (DELETE)
-  Future<void> deleteSchedule(String scheduleId) async {
+  /// 여정 삭제. 낙관적으로 먼저 지우고, 서버가 실패하면 되돌림.
+  Future<bool> deleteSchedule(int scheduleId) async {
+    final index = schedules.indexWhere((s) => s.id == scheduleId);
+    if (index == -1) return false;
+
+    final removed = schedules[index];
+    schedules = List.of(schedules)..removeAt(index);
+    error = null;
+    _notify();
+
     try {
-      // 화면 UI에서 먼저 바로 지워줘서 반응 속도 업!
-      schedules.removeWhere((item) => item['id'] == scheduleId);
-      notifyListeners();
-
-      // 백엔드 삭제 API 호출
-      await ApiService.deleteSchedule(scheduleId);
-    } catch (e) {
-      errorMessage = '삭제에 실패했어요. 다시 시도해 주세요.';
-      notifyListeners();
-      fetchSchedules(); // 에러 시 데이터 원복
-    }
-  }
-
-  // 3. 즐겨찾기(고정) 토글
-  void toggleFavorite(String scheduleId) {
-    final index = schedules.indexWhere((item) => item['id'] == scheduleId);
-    if (index != -1) {
-      schedules[index]['is_favorite'] = !(schedules[index]['is_favorite'] ?? false);
-      notifyListeners();
-      // 백엔드 업데이트 API 호출 필요 시 여기에 연결
+      await ScheduleApiService.deleteSchedule(scheduleId);
+      // 지도 탭이 지운 여정을 계속 조회하지 않도록 캐시된 id도 정리.
+      await ScheduleApiService.clearLastScheduleIdIf(scheduleId);
+      return true;
+    } on ScheduleApiException catch (e) {
+      // 404는 이미 삭제된 것이므로 되돌리지 않음.
+      if (e.kind == ScheduleApiErrorKind.notFound) {
+        await ScheduleApiService.clearLastScheduleIdIf(scheduleId);
+        return true;
+      }
+      schedules = List.of(schedules)..insert(index, removed);
+      error = e;
+      _notify();
+      return false;
     }
   }
 }

@@ -1,13 +1,87 @@
+import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import '../models/schedule.dart';
+import 'auth_service.dart';
+import 'place_service.dart';
+
+/// 스케줄(여정) 관련 백엔드 연동 단일 진입점.
+
+enum ScheduleApiErrorKind {
+  /// 인터넷이 끊겼거나 서버에 닿지 못함
+  network,
+
+  /// 서버가 제한 시간 안에 응답하지 않음
+  timeout,
+
+  /// 토큰 만료·무효 (AuthService가 로그인 화면으로 보냄)
+  unauthorized,
+
+  /// 요청한 스케줄이 없음(삭제됐거나 남의 것)
+  notFound,
+
+  /// 요청 형식이 서버 명세와 안 맞음 (422 등)
+  badRequest,
+
+  /// 서버 내부 오류
+  server,
+
+  /// 200이지만 본문이 예상한 JSON 형태가 아님
+  parse,
+}
+
+class ScheduleApiException implements Exception {
+  final ScheduleApiErrorKind kind;
+  final int? statusCode;
+
+  /// 서버 원본 메시지. 화면에 띄우지 않고 로그용으로만 씀.
+  final String? detail;
+
+  const ScheduleApiException(this.kind, {this.statusCode, this.detail});
+
+  /// 사용자에게 보여줄 문구.
+  String get userMessage {
+    switch (kind) {
+      case ScheduleApiErrorKind.network:
+        return '인터넷 연결을 확인해주세요.';
+      case ScheduleApiErrorKind.timeout:
+        return '서버 응답이 늦어지고 있어요. 잠시 후 다시 시도해주세요.';
+      case ScheduleApiErrorKind.unauthorized:
+        return '로그인이 만료됐어요. 다시 로그인해주세요.';
+      case ScheduleApiErrorKind.notFound:
+        return '이 여정을 찾을 수 없어요. 삭제됐을 수 있어요.';
+      case ScheduleApiErrorKind.badRequest:
+        return '요청 내용이 서버와 맞지 않아요.';
+      case ScheduleApiErrorKind.server:
+        return '서버에 문제가 생겼어요. 잠시 후 다시 시도해주세요.';
+      case ScheduleApiErrorKind.parse:
+        return '서버 응답을 이해하지 못했어요.';
+    }
+  }
+
+  /// 재시도 버튼을 보여줄지.
+  bool get isRetryable =>
+      kind == ScheduleApiErrorKind.network ||
+      kind == ScheduleApiErrorKind.timeout ||
+      kind == ScheduleApiErrorKind.server;
+
+  @override
+  String toString() =>
+      'ScheduleApiException($kind, status=$statusCode, detail=$detail)';
+}
 
 class ScheduleApiService {
-  // 🐛 버그 수정: api_service.dart의 ApiService._baseUrl과 같은 이유로 404가 나던
-  // 부분(자세한 설명은 그쪽 주석 참고). 다른 서비스들과 같은 백엔드/버전 프리픽스
-  // (/api/v1)를 기본값으로 쓰도록 통일함.
-  static const String _defaultHost = 'https://api.seankim428.site';
+  ScheduleApiService._();
+
+  static const String _defaultHost = '';
+  static const Duration _timeout = Duration(seconds: 15);
+
+  static const _storage = FlutterSecureStorage();
+  static const _lastScheduleIdKey = 'last_schedule_id';
 
   static String get _baseUrl {
     var host = dotenv.env['BASE_URL'] ?? _defaultHost;
@@ -16,29 +90,224 @@ class ScheduleApiService {
     return host.endsWith('/api/v1') ? host : '$host/api/v1';
   }
 
-  /// 📅 일정 상세 정보 백엔드 API 조회
-  static Future<Map<String, dynamic>?> fetchScheduleDetail(int scheduleId) async {
-    final url = Uri.parse('$_baseUrl/schedulers/$scheduleId');
+  // -------------------------------------------------------------------------
+  // 공용 요청 처리
+  // -------------------------------------------------------------------------
 
+  /// 네트워크 예외와 상태 코드를 ScheduleApiException으로 정규화해서 돌려줌.
+  static Future<T> _send<T>(
+    String label,
+    Future<http.Response> Function() request,
+    T Function(http.Response response) onSuccess,
+  ) async {
+    http.Response response;
     try {
-      final response = await http.get(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${dotenv.env['AUTH_TOKEN']}',
-        },
-      ).timeout(const Duration(seconds: 8));
-
-      if (response.statusCode == 200) {
-        // UTF-8 디코딩으로 한글 깨짐 방지
-        return json.decode(utf8.decode(response.bodyBytes));
-      } else {
-        debugPrint('❌ 일정 상세 조회 에러 (${response.statusCode}): ${response.body}');
-      }
-    } catch (e) {
-      debugPrint('💥 일정 상세 API 통신 예외: $e');
+      response = await request().timeout(_timeout);
+    } on TimeoutException {
+      debugPrint('⏱️ [$label] 타임아웃 (${_timeout.inSeconds}s)');
+      throw const ScheduleApiException(ScheduleApiErrorKind.timeout);
+    } on SocketException catch (e) {
+      debugPrint('📡 [$label] 네트워크 실패: $e');
+      throw const ScheduleApiException(ScheduleApiErrorKind.network);
+    } on http.ClientException catch (e) {
+      debugPrint('📡 [$label] 네트워크 실패: $e');
+      throw const ScheduleApiException(ScheduleApiErrorKind.network);
     }
 
-    return null;
+    final status = response.statusCode;
+    if (status >= 200 && status < 300) {
+      return onSuccess(response);
+    }
+
+    final body = _safeBody(response);
+    debugPrint('❌ [$label] HTTP $status: $body');
+
+    final ScheduleApiErrorKind kind;
+    if (status == 401 || status == 403) {
+      kind = ScheduleApiErrorKind.unauthorized;
+    } else if (status == 404) {
+      kind = ScheduleApiErrorKind.notFound;
+    } else if (status == 400 || status == 422) {
+      kind = ScheduleApiErrorKind.badRequest;
+    } else {
+      kind = ScheduleApiErrorKind.server;
+    }
+
+    throw ScheduleApiException(kind, statusCode: status, detail: body);
+  }
+
+  static String _safeBody(http.Response response) {
+    try {
+      return utf8.decode(response.bodyBytes);
+    } catch (_) {
+      return response.body;
+    }
+  }
+
+  static dynamic _decode(String label, http.Response response) {
+    try {
+      return jsonDecode(_safeBody(response));
+    } catch (e) {
+      debugPrint('🧩 [$label] JSON 파싱 실패: $e');
+      throw const ScheduleApiException(ScheduleApiErrorKind.parse);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 조회
+  // -------------------------------------------------------------------------
+
+  /// GET /api/v1/schedulers — 내 여정 목록
+  static Future<List<ScheduleSummary>> fetchSchedules() {
+    final url = Uri.parse('$_baseUrl/schedulers');
+    return _send('fetchSchedules', () => AuthService.instance.authorizedGet(url), (res) {
+      final data = _decode('fetchSchedules', res);
+
+      final List list;
+      if (data is List) {
+        list = data;
+      } else if (data is Map && data['items'] is List) {
+        list = data['items'] as List;
+      } else if (data is Map && data['results'] is List) {
+        list = data['results'] as List;
+      } else {
+        debugPrint('🧩 [fetchSchedules] 배열이 아닌 응답: $data');
+        throw const ScheduleApiException(ScheduleApiErrorKind.parse);
+      }
+
+      return list
+          .whereType<Map<String, dynamic>>()
+          .map(ScheduleSummary.fromJson)
+          .toList();
+    });
+  }
+
+  /// GET /api/v1/schedulers/{id} — 여정 상세
+  static Future<ScheduleDetail> fetchScheduleDetail(int scheduleId) {
+    final url = Uri.parse('$_baseUrl/schedulers/$scheduleId');
+    return _send('fetchScheduleDetail', () => AuthService.instance.authorizedGet(url), (res) {
+      final data = _decode('fetchScheduleDetail', res);
+      if (data is! Map<String, dynamic>) {
+        debugPrint('🧩 [fetchScheduleDetail] 객체가 아닌 응답: $data');
+        throw const ScheduleApiException(ScheduleApiErrorKind.parse);
+      }
+      return ScheduleDetail.fromJson(data);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 생성 / 삭제
+  // -------------------------------------------------------------------------
+
+  /// POST /api/v1/schedulers
+  ///
+  /// 방문 순서·시간대는 서버가 자동 배정하므로 places[]에 담아 보내지 않음.
+  static Future<ScheduleDetail> createSchedule({
+    required List<RecommendedPlace> places,
+    required PlaceAnchor anchor,
+    required String title,
+    required String mobilityMode,
+    required int searchRadius,
+    required String tripType,
+    required String companionType,
+    required int companionCount,
+    required DateTime startDateTime,
+    required DateTime endDateTime,
+  }) {
+    // 422를 받고 역추적하지 않도록 필수값을 여기서 먼저 막음.
+    for (final p in places) {
+      if (p.contentId == null || p.contentId!.isEmpty) {
+        throw ScheduleApiException(
+          ScheduleApiErrorKind.badRequest,
+          detail: '"${p.title}"에 content_id가 없음 (GET /places/nearby 응답 확인 필요)',
+        );
+      }
+      if (!p.hasCoordinates) {
+        throw ScheduleApiException(
+          ScheduleApiErrorKind.badRequest,
+          detail: '"${p.title}"에 좌표가 없음',
+        );
+      }
+    }
+    if (anchor.latitude == null || anchor.longitude == null) {
+      throw const ScheduleApiException(
+        ScheduleApiErrorKind.badRequest,
+        detail: '기준 장소(anchor)에 좌표가 없음',
+      );
+    }
+
+    final url = Uri.parse('$_baseUrl/schedulers');
+    final requestBody = {
+      'title': title,
+      'mobility_mode': mobilityMode,
+      'search_radius': searchRadius, // SearchRadiusKm: 3 또는 5만 허용
+      'trip_type': tripType,
+      'memory_place': {
+        'name': anchor.title,
+        'address': anchor.address,
+        'latitude': anchor.latitude,
+        'longitude': anchor.longitude,
+      },
+      'places': places
+          .map((p) => {
+                'content_id': p.contentId,
+                'title': p.title,
+                // 한글 category는 되돌릴 수 없어 원본 영문값을 그대로 보냄.
+                'category': p.rawCategory,
+                'latitude': p.latitude,
+                'longitude': p.longitude,
+                if (p.imageUrl != null) 'image_url': p.imageUrl,
+                if (p.kakaoPlaceId != null) 'kakao_place_id': p.kakaoPlaceId,
+                if (p.placeUrl != null) 'place_url': p.placeUrl,
+              })
+          .toList(),
+      'companion_type': companionType,
+      'companion_count': companionCount,
+      'start_datetime': startDateTime.toUtc().toIso8601String(),
+      'end_datetime': endDateTime.toUtc().toIso8601String(),
+    };
+
+    debugPrint('📤 [createSchedule] POST $url');
+    return _send(
+      'createSchedule',
+      () => AuthService.instance.authorizedPost(url, body: jsonEncode(requestBody)),
+      (res) {
+        final data = _decode('createSchedule', res);
+        if (data is! Map<String, dynamic>) {
+          throw const ScheduleApiException(ScheduleApiErrorKind.parse);
+        }
+        return ScheduleDetail.fromJson(data);
+      },
+    );
+  }
+
+  /// DELETE /api/v1/schedulers/{id} → 204 No Content
+  static Future<void> deleteSchedule(int scheduleId) {
+    final url = Uri.parse('$_baseUrl/schedulers/$scheduleId');
+    return _send<void>(
+      'deleteSchedule',
+      () => AuthService.instance.authorizedDelete(url),
+      (_) {},
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // 마지막으로 만든 스케줄 (지도 탭이 자동으로 그려줄 대상)
+  // -------------------------------------------------------------------------
+
+  static Future<void> saveLastScheduleId(int scheduleId) =>
+      _storage.write(key: _lastScheduleIdKey, value: '$scheduleId');
+
+  static Future<int?> getLastScheduleId() async {
+    final raw = await _storage.read(key: _lastScheduleIdKey);
+    if (raw == null) return null;
+    return int.tryParse(raw);
+  }
+
+  /// 삭제한 게 마지막 스케줄이었다면 저장해둔 id도 같이 지움.
+  static Future<void> clearLastScheduleIdIf(int scheduleId) async {
+    if (await getLastScheduleId() == scheduleId) {
+      await _storage.delete(key: _lastScheduleIdKey);
+    }
   }
 }

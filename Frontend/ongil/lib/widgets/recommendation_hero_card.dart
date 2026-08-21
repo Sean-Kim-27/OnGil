@@ -61,7 +61,7 @@ class RecommendationHeroCard extends StatelessWidget {
                             child: Icon(
                               placeholderIcon,
                               size: 52,
-                              color: AppColors.cardBackground.withOpacity(0.85),
+                              color: AppColors.cardBackground.withValues(alpha: 0.85),
                             ),
                           )
                         : null,

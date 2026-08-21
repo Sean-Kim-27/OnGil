@@ -1,16 +1,20 @@
 import 'package:flutter/material.dart';
+import '../models/schedule.dart';
+import '../widgets/category_icon_box.dart';
 import 'package:kakao_map_plugin/kakao_map_plugin.dart';
 import '../controllers/map_controller.dart';
-import '../models/schedule_item.dart';
 import '../widgets/place_detail_bottom_sheet.dart';
 import '../constants/app_color.dart';
 import '../services/place_service.dart';
 
 class MapScreen extends StatefulWidget {
-  /// 홈 화면에서 검색한 결과. 있으면 지도가 그 위치로 이동하고, '스케줄링 시작하기'를 누르면 이 근처의 실제 추천 장소들로 스케줄 선택이 시작됨.
+  /// 홈에서 검색한 결과. 지도 검색창에서 다시 검색하면 그쪽이 우선함.
   final NearbySearchResult? searchResult;
 
-  const MapScreen({super.key, this.searchResult});
+  /// 이 여정의 경로를 그려달라는 요청.
+  final int? focusScheduleId;
+
+  const MapScreen({super.key, this.searchResult, this.focusScheduleId});
 
   @override
   State<MapScreen> createState() => _MapScreenState();
@@ -20,7 +24,10 @@ class _MapScreenState extends State<MapScreen> {
   final MapController _controller = MapController();
   final TextEditingController _searchController = TextEditingController();
 
-  // 하단에서 올라오는 장소 상세 바텀시트
+  /// 스케줄 생성의 기준. 지도 검색 결과가 있으면 그것, 없으면 홈 결과.
+  NearbySearchResult? get _activeSearchResult =>
+      _controller.nearbyResult ?? widget.searchResult;
+
   void _showPlaceDetailBottomSheet(
     BuildContext context,
     String placeName,
@@ -45,6 +52,23 @@ class _MapScreenState extends State<MapScreen> {
     _controller.addListener(() {
       setState(() {});
     });
+    final anchorTitle = widget.searchResult?.anchor.title;
+    if (anchorTitle != null && anchorTitle.isNotEmpty) {
+      _searchController.text = anchorTitle;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant MapScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 화면이 이미 떠 있는 상태에서 대상 여정만 바뀌어도 다시 그려줌.
+    final focusId = widget.focusScheduleId;
+    if (focusId != null && focusId != oldWidget.focusScheduleId) {
+      // didUpdateWidget은 빌드 중에 불리므로 setState를 다음 프레임으로 미룸.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _controller.fetchAndDrawSchedule(focusId);
+      });
+    }
   }
 
   @override
@@ -54,48 +78,87 @@ class _MapScreenState extends State<MapScreen> {
     super.dispose();
   }
 
+  static bool _hasCoords(NearbySearchResult r) =>
+      r.anchor.latitude != null && r.anchor.longitude != null;
+
+  /// 지도 준비 직후 표시 대상 결정: 요청받은 경로 > 검색한 지역 > 마지막 여정.
+  Future<void> _bootstrapMap() async {
+    final focusId = widget.focusScheduleId;
+    if (focusId != null) {
+      await _controller.fetchAndDrawSchedule(focusId);
+      return;
+    }
+
+    // 지도 검색이 홈 검색에 덮이지 않게 더 나중에 검색한 쪽을 기준으로 삼음.
+    NearbySearchResult? best;
+    final fromHome = widget.searchResult;
+    if (fromHome != null && _hasCoords(fromHome)) best = fromHome;
+
+    final cached = MapController.lastMapSearch;
+    if (cached != null &&
+        _hasCoords(cached) &&
+        (best == null || cached.fetchedAt.isAfter(best.fetchedAt))) {
+      best = cached;
+    }
+
+    if (best != null) {
+      _controller.applyNearbyResult(best);
+      final title = best.anchor.title;
+      if (title.isNotEmpty) _searchController.text = title;
+      await _controller.refreshSavedScheduleFlag();
+      return;
+    }
+
+    await _controller.fetchAndDrawLastSchedule();
+  }
+
+  void _startScheduling() {
+    Navigator.pushNamed(
+      context,
+      '/place_select',
+      arguments: _activeSearchResult,
+    );
+  }
+
+  Future<void> _showLastSchedule() async {
+    final found = await _controller.fetchAndDrawLastSchedule();
+    if (!mounted || found) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('아직 만든 여정이 없어요. 먼저 스케줄을 만들어보세요')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     const primaryColor = Color(0xFFC85A32);
+    final searchResult = _activeSearchResult;
+    final hasRoute = _controller.scheduleList.isNotEmpty;
 
     return Scaffold(
       body: Stack(
         children: [
-          // 1. 카카오 지도 
           KakaoMap(
             onMapCreated: (controller) {
               _controller.setMapController(controller);
-              final anchor = widget.searchResult?.anchor;
-              if (anchor != null && anchor.latitude != null && anchor.longitude != null) {
-                _controller.moveToAnchor(
-                  anchor.title,
-                  LatLng(anchor.latitude!, anchor.longitude!),
-                );
-              }
-              // 최근에 만든 스케줄이 있으면 그 경로를 그려줌
-              _controller.fetchAndDrawLastSchedule();
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _bootstrapMap();
+              });
             },
             center: _controller.currentCenter,
             markers: _controller.markers.toList(),
             polylines: _controller.polylines.toList(),
             onMarkerTap: (markerId, latLng, zoomLevel) {
-              //  1. 터치한 마커 위치로 카메라 중심을 부드럽게 이동
               _controller.panTo(latLng);
 
-              // 2. 장소 이름 찾기
-              int index =
-                  int.tryParse(markerId.replaceAll('schedule_', '')) ?? 0;
-              String placeName = '선택한 장소';
-              if (index < _controller.scheduleList.length) {
-                placeName = _controller.scheduleList[index].title;
-              }
+              // 마커 종류에 맞춰 이름을 찾음.
+              _controller.onMarkerTapped(markerId);
+              final placeName = _controller.resolveMarkerTitle(markerId);
 
-              // 3. 바텀시트 띄우기
               _showPlaceDetailBottomSheet(context, placeName, latLng);
             },
           ),
 
-          // 2. [상단] 검색바 & 위치 뱃지 ("경복궁 일대"로 자동 변경됨)
+          // 상단 검색바 & 위치 뱃지
           Positioned(
             top: 0,
             left: 0,
@@ -153,6 +216,15 @@ class _MapScreenState extends State<MapScreen> {
                                     ),
                                   ),
                                 ),
+                                if (_controller.isSearchingNearby)
+                                  const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: primaryColor,
+                                    ),
+                                  ),
                               ],
                             ),
                           ),
@@ -183,53 +255,96 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // 위치 표시 뱃지 (memory_place.name 반영)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.9),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.location_on_outlined,
-                            color: primaryColor,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${_controller.selectedLocationName} ',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF2C2825),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.9),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.location_on_outlined,
+                                  color: primaryColor,
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    _controller.selectedLocationName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF2C2825),
+                                    ),
+                                  ),
+                                ),
+                                const Text(
+                                  ' 일대',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Color(0xFF8A827A),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          const Text(
-                            '일대',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF8A827A),
-                            ),
+                        ),
+                        if (hasRoute) ...[
+                          const SizedBox(width: 8),
+                          _InfoPill(
+                            icon: Icons.route_outlined,
+                            label: '여정 경로 ${_controller.scheduleList.length}곳',
+                          ),
+                        ] else if (searchResult != null &&
+                            searchResult.places.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          _InfoPill(
+                            icon: Icons.place_outlined,
+                            label: '추천 ${searchResult.places.length}곳',
                           ),
                         ],
-                      ),
+                      ],
                     ),
+
+                    if (_controller.searchMessage != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.95),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          _controller.searchMessage!,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF8A827A),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
             ),
           ),
 
-          // 3-1. [중앙] 아직 그려진 스케줄이 없을 때 안내 카드 (기존에 만들어만 놓고 화면에실제로 띄우진 않고 있던 위젯이라 여기서 연결함)
           _buildMapOverlay(),
 
-          // 3. [하단] 선택된 장소 상세 카드 (마커 터치 시 노출)
+          // 마커 터치 시 뜨는 장소 상세 카드
           if (_controller.selectedScheduleItem != null)
             Positioned(
               left: 16,
@@ -238,38 +353,61 @@ class _MapScreenState extends State<MapScreen> {
               child: _buildPlaceDetailCard(_controller.selectedScheduleItem!),
             ),
 
-          // 4. [하단] 스케줄링 시작하기 버튼
           Positioned(
             left: 16,
             right: 16,
             bottom: 16,
-            child: SizedBox(
-              height: 54,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.pushNamed(
-                    context,
-                    '/place_select',
-                    arguments: widget.searchResult?.places,
-                  );
-                },
-                icon: const Icon(Icons.route_outlined, color: Colors.white),
-                label: const Text(
-                  '스케줄링 시작하기',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
+            child: Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 54,
+                    child: ElevatedButton.icon(
+                      onPressed: _startScheduling,
+                      icon: const Icon(Icons.route_outlined, color: Colors.white),
+                      label: Text(
+                        searchResult != null && searchResult.places.isNotEmpty
+                            ? '${searchResult.anchor.title} 기준 스케줄링'
+                            : '스케줄링 시작하기',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: primaryColor,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        elevation: 4,
+                      ),
+                    ),
                   ),
                 ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: primaryColor,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(18),
+                // 경로가 없고 저장된 여정이 있으면 다시 볼 수 있게 해줌.
+                if (!hasRoute && _controller.hasSavedSchedule) ...[
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    height: 54,
+                    width: 54,
+                    child: ElevatedButton(
+                      onPressed: _showLastSchedule,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        padding: EdgeInsets.zero,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        elevation: 4,
+                      ),
+                      child: const Icon(Icons.timeline, color: primaryColor),
+                    ),
                   ),
-                  elevation: 4,
-                ),
-              ),
+                ],
+              ],
             ),
           ),
         ],
@@ -277,8 +415,7 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // 하단 상세 카드 위젯
-  Widget _buildPlaceDetailCard(ScheduleItem item) {
+  Widget _buildPlaceDetailCard(SchedulePlace item) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -338,9 +475,9 @@ class _MapScreenState extends State<MapScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                if (item.category.isNotEmpty)
+                if (categoryLabel(item.category).isNotEmpty)
                   Text(
-                    item.category,
+                    categoryLabel(item.category),
                     style: const TextStyle(
                       fontSize: 12,
                       color: Color(0xFF8A827A),
@@ -391,6 +528,11 @@ class _MapScreenState extends State<MapScreen> {
         child: CircularProgressIndicator(color: AppColors.primary),
       );
     }
+
+    // 검색 결과가 떠 있으면 안내 카드가 지도를 가리지 않게 숨김.
+    final hasSearchMarkers = (_activeSearchResult?.places.isNotEmpty ?? false);
+    if (hasSearchMarkers) return const SizedBox.shrink();
+
     if (_controller.scheduleList.isEmpty && !_controller.isLoadingPlaceDetail) {
       final hasTriedBefore = _controller.lastAttemptedScheduleId != null;
       return Center(
@@ -418,7 +560,10 @@ class _MapScreenState extends State<MapScreen> {
               ),
               const SizedBox(height: 12),
               Text(
-                hasTriedBefore ? '일정 장소 정보를 불러올 수 없습니다.' : '아직 만든 스케줄이 없어요.',
+                _controller.scheduleError?.userMessage ??
+                    (hasTriedBefore
+                        ? '이 여정에는 지도에 표시할 장소가 없어요.'
+                        : '아직 만든 스케줄이 없어요.'),
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 16,
@@ -426,14 +571,14 @@ class _MapScreenState extends State<MapScreen> {
                   color: AppColors.textPrimary,
                 ),
               ),
-              if (!hasTriedBefore) ...[
-                const SizedBox(height: 6),
-                Text(
-                  '아래 "스케줄링 시작하기"로 첫 스케줄을 만들어보세요',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-                ),
-              ],
+              const SizedBox(height: 6),
+              Text(
+                hasTriedBefore
+                    ? '위 검색창에서 지역을 검색하면 그 근처로 새 스케줄을 만들 수 있어요'
+                    : '위 검색창에서 가고 싶은 지역을 검색한 뒤\n"스케줄링 시작하기"를 눌러보세요',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
               if (hasTriedBefore) ...[
                 const SizedBox(height: 16),
                 ElevatedButton(
@@ -456,5 +601,39 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
     return const SizedBox.shrink();
+  }
+}
+
+/// 지도 상단의 작은 정보 알약.
+class _InfoPill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _InfoPill({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFC85A32).withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Colors.white),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

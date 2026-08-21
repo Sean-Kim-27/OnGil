@@ -96,11 +96,8 @@ class _KakaoWebViewScreenState extends State<KakaoWebViewScreen> {
   }
 }
 
-/// 장소의 카카오맵 상세 페이지를 찾아서 앱 내부 웹뷰로 열어줌.
-/// - 위경도가 없으면(백엔드 응답에 좌표가 안 실려온 경우) API를 부를 수 없으니 바로
-///   "카카오맵에서 검색해보라"는 안내로 보냄.
-/// - 카카오맵 자체에 상세 페이지가 없는 장소(404, 숙박·축제에서 흔함)도 같은 안내로 처리.
-/// - 그 외 에러는 스낵바로만 짧게 알림.
+/// 장소의 카카오맵 상세 페이지를 찾아 앱 내부 웹뷰로 열어줌.
+/// 좌표가 없거나 상세 페이지가 없으면 검색 안내로 대체함.
 Future<void> openKakaoPlaceDetail(
   BuildContext context, {
   required String title,

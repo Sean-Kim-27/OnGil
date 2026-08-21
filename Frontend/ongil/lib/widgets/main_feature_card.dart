@@ -100,7 +100,7 @@ class _PhotoHeader extends StatelessWidget {
         MemoryPhotoHero(
           image: image,
           height: 200,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.cardHero)),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(AppRadius.cardHero)),
         ),
         Positioned(
           bottom: 16,
@@ -108,7 +108,7 @@ class _PhotoHeader extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: AppColors.cardBackground.withOpacity(0.6),
+              color: AppColors.cardBackground.withValues(alpha: 0.6),
               borderRadius: BorderRadius.circular(AppRadius.pill),
               border: Border.all(color: AppColors.accent, width: 1.2),
             ),

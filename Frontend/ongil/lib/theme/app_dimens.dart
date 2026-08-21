@@ -1,4 +1,5 @@
 /// 온길 디자인 시스템 - 여백/모서리/아이콘 사이즈 토큰
+library;
 
 class AppSpacing {
   AppSpacing._();

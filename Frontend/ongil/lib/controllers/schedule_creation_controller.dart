@@ -21,8 +21,21 @@ class ScheduleCreationController extends ChangeNotifier {
 
   List<String> get currentStepSelectedIds => selectedPlacesByStep[currentStep] ?? [];
 
-  // 현재 스텝에서 최소 1개 이상 선택되었는지 체크하는 getter
-  bool get canGoNext => (selectedPlacesByStep[currentStep] ?? []).isNotEmpty;
+  // 숙소(2단계)는 당일치기면 고를 수 없으므로 선택 없이도 통과시킴.
+  bool get canGoNext {
+    if (currentStep == 2) return true;
+    return (selectedPlacesByStep[currentStep] ?? []).isNotEmpty;
+  }
+
+  /// 선택을 전부 비우고 1단계로 되돌림(지역을 새로 검색했을 때).
+  void reset() {
+    currentStep = 1;
+    errorMessage = null;
+    for (final list in selectedPlacesByStep.values) {
+      list.clear();
+    }
+    notifyListeners();
+  }
 
   // 장소 선택 / 해제 토글
   void togglePlaceSelection(String placeId) {
@@ -69,5 +82,5 @@ class ScheduleCreationController extends ChangeNotifier {
     return allIds;
   }
 
-
+  // 스케줄 생성은 ai_schedule_working.dart의 ScheduleApiService.createSchedule()에서 처리함.
 }

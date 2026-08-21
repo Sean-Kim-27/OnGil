@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_dimens.dart';
 
-/// 프로젝트 전체에서 반복 사용하는 '추억 사진' 모티프.
-/// 실제 사진이 없을 때 브랜드 그라디언트 + 풍경 아이콘으로 대체 표시하고
+/// '추억 사진' 자리. 사진이 없으면 브랜드 그라디언트로 대체.
 class MemoryPhoto extends StatelessWidget {
   final double size;
   final double radius;
@@ -43,7 +42,7 @@ class MemoryPhoto extends StatelessWidget {
               child: Icon(
                 Icons.landscape_outlined,
                 size: size * 0.32,
-                color: AppColors.cardBackground.withOpacity(0.75),
+                color: AppColors.cardBackground.withValues(alpha: 0.75),
               ),
             )
           : null,
@@ -51,9 +50,7 @@ class MemoryPhoto extends StatelessWidget {
   }
 }
 
-/// 홈 화면 히어로용 큰 버전 (풀 와이드 카드 상단 이미지 영역).
-/// borderRadius를 지정하지 않으면 카드 전체와 동일한 라운드(기존 동작)로 표시되고,
-/// 카드 상단에 딱 붙는 형태로 쓸 때는 위쪽 모서리만 둥근 BorderRadius를 넘겨서 재사용할 수 있습니다.
+/// 풀 와이드 카드 상단용 큰 버전.
 class MemoryPhotoHero extends StatelessWidget {
   final ImageProvider? image;
   final double height;
@@ -95,7 +92,7 @@ class MemoryPhotoHero extends StatelessWidget {
                 child: Icon(
                   Icons.image_outlined,
                   size: 20,
-                  color: AppColors.cardBackground.withOpacity(0.8),
+                  color: AppColors.cardBackground.withValues(alpha: 0.8),
                 ),
               ),
             )

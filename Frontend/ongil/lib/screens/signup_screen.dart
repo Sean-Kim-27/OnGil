@@ -76,7 +76,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            AppBackTopBar(title: '회원가입'),
+            const AppBackTopBar(title: '회원가입'),
             Expanded(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(

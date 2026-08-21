@@ -11,7 +11,7 @@ class AppShadows {
 
   static List<BoxShadow> cta = [
     BoxShadow(
-      color: AppColors.accent.withOpacity(0.28),
+      color: AppColors.accent.withValues(alpha: 0.28),
       blurRadius: 18,
       offset: const Offset(0, 8),
     ),
@@ -19,7 +19,7 @@ class AppShadows {
 
   static List<BoxShadow> fab = [
     BoxShadow(
-      color: AppColors.accent.withOpacity(0.35),
+      color: AppColors.accent.withValues(alpha: 0.35),
       blurRadius: 20,
       offset: const Offset(0, 10),
     ),
@@ -28,7 +28,7 @@ class AppShadows {
   /// 홈 화면 메인 피처 카드에 쓰이는 아주 은은한 그림자 
   static List<BoxShadow> card = [
     BoxShadow(
-      color: Colors.black.withOpacity(0.03),
+      color: Colors.black.withValues(alpha: 0.03),
       blurRadius: 15,
       offset: const Offset(0, 6),
     ),
@@ -47,7 +47,6 @@ class AppTheme {
       primary: AppColors.accent,
       secondary: AppColors.brand,
       surface: AppColors.cardBackground,
-      background: AppColors.background,
     ),
     textTheme: const TextTheme(
       bodyMedium: AppTextStyles.body,

@@ -41,8 +41,12 @@ class AppColors {
   static const mapTint = Color(0xFFEBF3E8);
 
   /// '지도 살펴보기' 카드 테두리
-  static final mapTintBorder = Colors.green.withOpacity(0.15);
+  static final mapTintBorder = Colors.green.withValues(alpha: 0.15);
 
   /// 메인 카드 · '스케줄 보러가기' 카드 테두리
-  static final warmCardBorder = Colors.orange.withOpacity(0.15);
+  static final warmCardBorder = Colors.orange.withValues(alpha: 0.15);
+
+  /// '그때' 사진 플레이스홀더 그라디언트 (세피아 톤).
+  static const pastPhotoFrom = Color(0xFFCBB48C);
+  static const pastPhotoTo = Color(0xFFB79A6E);
 }

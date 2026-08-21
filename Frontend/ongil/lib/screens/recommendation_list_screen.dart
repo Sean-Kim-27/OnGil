@@ -9,9 +9,7 @@ import '../widgets/page_dots_indicator.dart';
 import '../widgets/kakao_webview_screen.dart';
 import '../services/place_service.dart';
 
-/// 추천 리스트 화면. 홈 화면 '더보기'에서 진입.
-/// 위쪽은 추천 장소를 한 장씩 옆으로 넘겨보는 카드(PageView, 한 번에 한 장만 보임),
-/// 그 아래 카테고리 필터, 그 아래 필터링된 장소들을 왼쪽 정렬 리스트로 보여줌.
+/// 추천 리스트 화면. 위쪽 카드(PageView) + 카테고리 필터 + 목록.
 class RecommendationListScreen extends StatefulWidget {
   final NearbySearchResult? searchResult;
 
@@ -51,7 +49,7 @@ class _RecommendationListScreenState extends State<RecommendationListScreen> {
     return match.isNotEmpty ? match.first.icon : Icons.place_outlined;
   }
 
-  /// 목록에서 장소를 탭하면 위쪽 추천 카드 맨위로 그 장소로 이동시키고, 화면도 맨 위로 스크롤해서 사진/상세를 바로 확인할 수 있게 함.
+  /// 목록에서 장소를 탭하면 위쪽 카드를 그 장소로 옮기고 맨 위로 스크롤.
   void _focusHero(RecommendedPlace place, List<RecommendedPlace> heroItems) {
     final index = heroItems.indexOf(place);
     if (index == -1) return;

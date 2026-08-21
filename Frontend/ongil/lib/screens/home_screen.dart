@@ -9,12 +9,14 @@ import '../widgets/main_feature_card.dart';
 import '../widgets/quick_action_cards.dart';
 import '../widgets/recommendation_card.dart';
 import '../widgets/kakao_webview_screen.dart';
+import '../controllers/app_shell_controller.dart';
 import '../services/auth_service.dart';
 import '../services/place_service.dart';
 import 'settings_screen.dart';
 import 'recommendation_list_screen.dart';
 import 'schedule_list_screen.dart';
 import 'map_screen.dart';
+import 'guestbook_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -26,6 +28,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _navIndex = 2; // '홈' 탭이 기본 선택 (0:지도 1:스케줄 2:홈 3:방명록 4:설정)
   String? _nickname;
+
+  /// 지도 탭에 그려달라고 넘길 여정 id.
+  int? _focusScheduleId;
 
   final _addressCtrl = TextEditingController();
   bool _isSearching = false;
@@ -55,12 +60,28 @@ class _HomeScreenState extends State<HomeScreen> {
     _checkSession();
     _loadProfile();
     _restoreLastAddress();
+    // 다른 화면에서 온 탭 전환 요청을 받아서 처리.
+    AppShellController.instance.addListener(_handleShellIntent);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _handleShellIntent());
   }
 
   @override
   void dispose() {
+    AppShellController.instance.removeListener(_handleShellIntent);
     _addressCtrl.dispose();
     super.dispose();
+  }
+
+  /// 대기 중인 탭 전환 요청을 한 번만 소비.
+  void _handleShellIntent() {
+    final intent = AppShellController.instance.consumePending();
+    if (intent == null || !mounted) return;
+    setState(() {
+      _navIndex = intent.tabIndex;
+      if (intent.focusScheduleId != null) {
+        _focusScheduleId = intent.focusScheduleId;
+      }
+    });
   }
 
   // 로그인 세션이 없으면 홈 진입 즉시 로그인 화면으로 되돌려보냄.
@@ -84,7 +105,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _searchAddress(address);
   }
 
-  // 주소(기준 장소명)를 저장하고, 그 기준 근처 추천 장소를 가져와 추천리스트/메인 카드에 반영함.
+  // 주소를 저장하고 그 근처 추천 장소를 가져와 화면에 반영.
   Future<void> _searchAddress(String address) async {
     final trimmed = address.trim();
     if (trimmed.isEmpty) return;
@@ -110,7 +131,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // 설정 화면으로 이동하고, 복귀 시 하단 탭을 '홈'으로 되돌리며 프로필을 새로고침함.
+  // 설정에서 돌아오면 '홈' 탭으로 되돌리고 프로필을 새로고침.
   void _openSettings() {
     Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => const SettingsScreen()))
@@ -127,17 +148,18 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 하단 탭에 따라 몸통 내용을 바꿔줌. 홈에서 검색한 결과(_searchResult)를 지도 탭에도
-  // 넘겨줘서, 홈에서 '부산역'을 검색했으면 지도도 그 근처로 이동하고 스케줄링도 그
-  // 근처 실제 장소들로 시작하게 함. 방명록만 아직 화면이 없어서 '준비 중'.
+  // 하단 탭에 따라 몸통을 바꿔줌. 홈 검색 결과는 지도 탭에도 넘김.
   Widget _buildTabBody(BuildContext context) {
     switch (_navIndex) {
       case 0:
-        return MapScreen(searchResult: _searchResult);
+        return MapScreen(
+          searchResult: _searchResult,
+          focusScheduleId: _focusScheduleId,
+        );
       case 1:
         return const ScheduleListScreen();
       case 3:
-        return const _ComingSoonTab(icon: Icons.menu_book_outlined, label: '방명록');
+        return const GuestbookScreen();
       case 2:
       default:
         return _buildHomeContent(context);
@@ -146,7 +168,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildHomeContent(BuildContext context) {
     final anchor = _searchResult?.anchor;
-    // 홈 화면 가로 목록은 이제 카테고리로 거르지 않고 전체를 보여줌 (필터는 추천 리스트 화면에서).
+    // 홈 가로 목록은 거르지 않고 전체를 보여줌(필터는 추천 리스트 화면에서).
     final displayPlaces = _places;
 
     return SafeArea(
@@ -264,7 +286,11 @@ class _HomeScreenState extends State<HomeScreen> {
             // '설정' 탭
             _openSettings();
           } else {
-            setState(() => _navIndex = i);
+            setState(() {
+              // 직접 탭을 누르면 '특정 여정 경로 보기' 요청은 해제.
+              _focusScheduleId = null;
+              _navIndex = i;
+            });
           }
         },
       ),
@@ -272,7 +298,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// 인사말 영역. 닉네임은 회원가입 때 저장한 값을 보여주고, 없으면 '회원'으로 대체함.
+/// 인사말 영역. 닉네임이 없으면 '회원'으로 대체.
 class _GreetingSection extends StatelessWidget {
   final String? nickname;
   const _GreetingSection({this.nickname});
@@ -296,29 +322,6 @@ class _GreetingSection extends StatelessWidget {
           style: AppTextStyles.heroGreeting,
         ),
       ],
-    );
-  }
-}
-
-/// 지도/방명록처럼 아직 화면이 준비 안 된 탭에 보여주는 자리표시자.
-class _ComingSoonTab extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  const _ComingSoonTab({required this.icon, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 40, color: AppColors.textSecondary),
-            const SizedBox(height: 12),
-            Text('$label 화면은 준비 중이에요', style: AppTextStyles.body),
-          ],
-        ),
-      ),
     );
   }
 }

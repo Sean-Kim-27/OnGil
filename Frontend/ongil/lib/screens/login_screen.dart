@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+
+import '../services/auth_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_dimens.dart';
 import '../theme/app_text_styles.dart';
 import '../widgets/brand_marks.dart';
-import '../services/auth_service.dart';
 import 'signup_screen.dart';
+import 'terms_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -14,52 +16,67 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  // 두 버튼 중 지금 로그인 진행 중인 쪽만 표시하기 위한 상태.
-  // ('google' | 'kakao' | null)
   String? _loadingProvider;
 
   bool get _isLoading => _loadingProvider != null;
 
-  Future<void> _handleGoogle() async {
-    setState(() => _loadingProvider = 'google');
+  Future<void> _signIn(String provider) async {
+    if (_isLoading) return;
+
+    final agreed = await _agreeToTerms(provider == 'kakao' ? '카카오' : 'Google');
+    if (!agreed) return;
+
+    setState(() => _loadingProvider = provider);
     try {
-      final profile = await AuthService.instance.signInWithGoogle();
-      _goToSignUp(profile);
+      final profile = provider == 'kakao'
+          ? await AuthService.instance.signInWithKakao()
+          : await AuthService.instance.signInWithGoogle();
+      await _routeAfterLogin(profile);
     } on AuthException catch (e) {
-      _showErrorIfNeeded(e);
+      _showError(e);
     } finally {
       if (mounted) setState(() => _loadingProvider = null);
     }
   }
 
-  Future<void> _handleKakao() async {
-    setState(() => _loadingProvider = 'kakao');
-    try {
-      final profile = await AuthService.instance.signInWithKakao();
-      _goToSignUp(profile);
-    } on AuthException catch (e) {
-      _showErrorIfNeeded(e);
-    } finally {
-      if (mounted) setState(() => _loadingProvider = null);
-    }
-  }
-
-  void _goToSignUp(AppAuthProfile profile) {
-    if (!mounted) return;
-    Navigator.of(context).push(
+  Future<bool> _agreeToTerms(String providerLabel) async {
+    final agreed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => SignUpScreen(
-          suggestedNickname: profile.nickname,
-          suggestedPhotoUrl: profile.photoUrl,
-        ),
+        builder: (_) => TermsAgreementScreen(providerLabel: providerLabel),
       ),
     );
+    return agreed ?? false;
   }
 
-  void _showErrorIfNeeded(AuthException e) {
-    // 사용자가 그냥 취소한 경우엔 에러로 취급하지 않고 넘어가게 둠
+  Future<void> _routeAfterLogin(AppAuthProfile profile) async {
+    final savedNickname = await AuthService.instance.getNickname();
+    if (!mounted) return;
+
+    final needsSignUp = profile.isNewUser || savedNickname == null || savedNickname.isEmpty;
+    if (needsSignUp) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => SignUpScreen(
+            suggestedNickname: profile.nickname,
+            suggestedPhotoUrl: profile.photoUrl,
+          ),
+        ),
+      );
+      return;
+    }
+    Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+  }
+
+  void _showError(AuthException e) {
     if (e.isUserCancel || !mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          duration: const Duration(seconds: 6),
+        ),
+      );
   }
 
   @override
@@ -88,13 +105,13 @@ class _LoginScreenState extends State<LoginScreen> {
               _KakaoButton(
                 label: '카카오로 시작하기',
                 loading: _loadingProvider == 'kakao',
-                onPressed: _isLoading ? null : _handleKakao,
+                onPressed: _isLoading ? null : () => _signIn('kakao'),
               ),
               const SizedBox(height: 10),
               _GoogleButton(
                 label: 'Google로 계속하기',
                 loading: _loadingProvider == 'google',
-                onPressed: _isLoading ? null : _handleGoogle,
+                onPressed: _isLoading ? null : () => _signIn('google'),
               ),
               const SizedBox(height: AppSpacing.sectionGap),
               const Text(
@@ -111,11 +128,11 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-/// 카카오 로그인 - 브랜드 로고와 색상을 위한노란색(#FEE500)만 예외로 사용,
 class _KakaoButton extends StatelessWidget {
   final String label;
   final bool loading;
   final VoidCallback? onPressed;
+
   const _KakaoButton({
     required this.label,
     required this.onPressed,
@@ -168,12 +185,11 @@ class _KakaoButton extends StatelessWidget {
   }
 }
 
-/// Google 로그인 - 나머지 버튼은 전부 아웃라인 규칙에 맞춰
-/// 흰 배경 + 기본 선(1px line) 처리. 화면당 CTA는 0개로, 액센트 채움 버튼은 화면당 최대 1개 규칙을 벗어나지 않음.
 class _GoogleButton extends StatelessWidget {
   final String label;
   final bool loading;
   final VoidCallback? onPressed;
+
   const _GoogleButton({
     required this.label,
     required this.onPressed,

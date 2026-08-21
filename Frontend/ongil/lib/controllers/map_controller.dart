@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:kakao_map_plugin/kakao_map_plugin.dart';
-import '../models/schedule_item.dart';
+import '../models/schedule.dart';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
 import '../services/kakao_api_service.dart';
+import '../services/place_service.dart';
 import '../services/schedule_api_service.dart';
-import '../services/api_service.dart';
 
 class MapController extends ChangeNotifier {
   Map<String, dynamic>? selectedPlaceDetail;
@@ -21,27 +21,50 @@ class MapController extends ChangeNotifier {
   String selectedLocationName = '경복궁'; // 기준 위치 이름
   String transportType = '도보';
   bool isLoadingSchedule = false;
-  // null: 아직 스케줄을 만든 적이 없음(온보딩 메시지) / 값 있음: 조회를 시도했었음(실패 시 에러+재시도)
+  /// null이면 아직 조회를 시도한 적 없음(온보딩 안내), 값이 있으면 시도했었음.
   String? lastAttemptedScheduleId;
+
+  /// 마지막 조회가 왜 실패했는지. 화면이 원인별 안내를 띄우는 데 씀.
+  ScheduleApiException? scheduleError;
+
+  /// 지도에서 마지막으로 검색한 주변 추천 결과. 있으면 스케줄 생성의 기준이 됨.
+  NearbySearchResult? nearbyResult;
+
+  /// 탭을 옮겼다 돌아와도 검색해둔 지역을 잃지 않게 하는 캐시.
+  static NearbySearchResult? lastMapSearch;
+
+  bool isSearchingNearby = false;
+
+  /// 검색 결과에 대해 사용자에게 알려줄 짧은 안내.
+  String? searchMessage;
+
+  /// 저장된 스케줄이 있는지(= '최근 여정 경로 보기' 노출 여부).
+  bool hasSavedSchedule = false;
+
+  /// 현재 지도에 경로가 그려진 스케줄 id.
+  int? drawnScheduleId;
 
   Set<Marker> markers = {};
   Set<Polyline> polylines = {};
-  List<ScheduleItem> scheduleList = [];
+  List<SchedulePlace> scheduleList = [];
 
-  ScheduleItem? selectedScheduleItem; // 💡 선택된 장소 정보 (바텀시트용)
+  /// markerId 'nearby_{i}' 를 되짚기 위한 목록 (nearbyResult.places 와 인덱스 동일).
+  List<RecommendedPlace> get nearbyPlaces => nearbyResult?.places ?? const [];
+
+  /// 마커를 눌러 선택한 장소(바텀시트용).
+  SchedulePlace? selectedScheduleItem;
 
   bool _isDisposed = false;
 
   @override
   void dispose() {
-    _isDisposed = true; // 💡 파괴 상태 플래그 설정
+    _isDisposed = true;
     super.dispose();
   }
 
   @override
   void notifyListeners() {
     if (!_isDisposed) {
-      // 💡 살아있을 때만 리스너 알림!
       super.notifyListeners();
     }
   }
@@ -51,11 +74,19 @@ class MapController extends ChangeNotifier {
   }
 
   void setTransportType(String type) {
+    if (transportType == type) return;
     transportType = type;
     notifyListeners();
+    // 도보는 직선, 차량은 도로 경로라 이동수단이 바뀌면 다시 그려야 함.
+    if (scheduleList.length > 1) {
+      final points = scheduleList
+          .map((item) => LatLng(item.latitude!, item.longitude!))
+          .toList();
+      drawScheduleRoute(points);
+    }
   }
 
-  void selectPlace(ScheduleItem item) {
+  void selectPlace(SchedulePlace item) {
     selectedScheduleItem = item;
     notifyListeners();
   }
@@ -65,13 +96,11 @@ class MapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // 💡 카메라 중심 이동 헬퍼 메서드 추가
   void panTo(LatLng latLng) {
     _kakaoMapController?.setCenter(latLng);
   }
 
-  // 홈 화면 등 다른 곳에서 이미 검색해서 얻은 위치(이름+좌표)로 지도를 바로 이동시킴.
-  // searchAndMoveLocation처럼 카카오 API를 다시 부르지 않고 좌표를 바로 씀.
+  /// 이미 확보한 좌표로 지도만 이동(검색 API를 다시 부르지 않음).
   void moveToAnchor(String name, LatLng latLng) {
     currentCenter = latLng;
     selectedLocationName = name;
@@ -79,13 +108,171 @@ class MapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // 🔍 마커 클릭 시 카카오 상세 정보 가져오기
+  /// '최근 여정 경로 보기' 버튼 노출 여부를 갱신.
+  Future<void> refreshSavedScheduleFlag() async {
+    final id = await ScheduleApiService.getLastScheduleId();
+    hasSavedSchedule = id != null;
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 검색
+  // ---------------------------------------------------------------------------
+
+  /// 주변 추천 검색을 먼저 시도하고, 실패하면 카카오 키워드 검색으로 카메라만 옮김.
+  Future<void> searchAndMoveLocation(String keyword) async {
+    final trimmed = keyword.trim();
+    if (trimmed.isEmpty) return;
+
+    isSearchingNearby = true;
+    searchMessage = null;
+    notifyListeners();
+
+    NearbySearchResult? result;
+    try {
+      result = await PlaceService.instance.fetchNearbyPlaces(trimmed);
+    } catch (e) {
+      debugPrint('💥 [MapController] 주변 추천 검색 실패: $e');
+    }
+
+    final anchor = result?.anchor;
+    final hasAnchorCoords =
+        anchor != null && anchor.latitude != null && anchor.longitude != null;
+
+    if (result != null && hasAnchorCoords) {
+      await PlaceService.instance.saveLastAddress(trimmed);
+      applyNearbyResult(result);
+      isSearchingNearby = false;
+      if (result.places.isEmpty) {
+        searchMessage = "'$trimmed' 근처에서 추천 장소를 찾지 못했어요";
+      }
+      notifyListeners();
+      return;
+    }
+
+    final moved = await _searchWithKakao(trimmed);
+    isSearchingNearby = false;
+    searchMessage = moved
+        ? '이 지역의 추천 장소를 불러오지 못했어요. 동네·역·학교 이름으로 다시 검색해보세요'
+        : "'$trimmed' 위치를 찾지 못했어요";
+    notifyListeners();
+  }
+
+  /// 검색 결과를 지도에 반영. 홈에서 넘어온 결과에도 같이 씀.
+  void applyNearbyResult(NearbySearchResult result, {bool moveCamera = true}) {
+    nearbyResult = result;
+    lastMapSearch = result;
+    searchMessage = null;
+
+    // 지역이 바뀌었으므로 이전 여정 경로는 지움.
+    polylines = {};
+    scheduleList = [];
+    selectedScheduleItem = null;
+    drawnScheduleId = null;
+    scheduleError = null;
+
+    final anchor = result.anchor;
+    if (anchor.title.isNotEmpty) selectedLocationName = anchor.title;
+
+    final points = <LatLng>[];
+    final placeMarkers = <Marker>[];
+
+    if (anchor.latitude != null && anchor.longitude != null) {
+      final anchorLatLng = LatLng(anchor.latitude!, anchor.longitude!);
+      currentCenter = anchorLatLng;
+      points.add(anchorLatLng);
+      placeMarkers.add(Marker(markerId: 'anchor', latLng: anchorLatLng));
+    }
+
+    for (var i = 0; i < result.places.length; i++) {
+      final p = result.places[i];
+      if (!p.hasCoordinates) continue;
+      final latLng = LatLng(p.latitude!, p.longitude!);
+      points.add(latLng);
+      // 마커 탭에서 장소를 되찾으려면 인덱스가 result.places와 같아야 함.
+      placeMarkers.add(Marker(markerId: 'nearby_$i', latLng: latLng));
+    }
+
+    markers = placeMarkers.toSet();
+
+    if (moveCamera) {
+      if (points.length > 1) {
+        fitBounds(points);
+      } else if (points.isNotEmpty) {
+        _kakaoMapController?.setCenter(points.first);
+        _kakaoMapController?.setLevel(5);
+      }
+    }
+
+    notifyListeners();
+  }
+
+  void clearNearbyResult() {
+    nearbyResult = null;
+    lastMapSearch = null;
+    markers = {};
+    searchMessage = null;
+    notifyListeners();
+  }
+
+  /// 추천 장소를 못 얻었을 때의 폴백 — 카메라만 이동.
+  Future<bool> _searchWithKakao(String keyword) async {
+    final url = Uri.parse(
+      'https://dapi.kakao.com/v2/local/search/keyword.json?query=${Uri.encodeComponent(keyword)}',
+    );
+
+    try {
+      final response = await http.get(
+        url,
+        headers: {
+          'Authorization': 'KakaoAK ${dotenv.env['KAKAO_REST_API_KEY']}',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final List documents = data['documents'];
+
+        if (documents.isNotEmpty) {
+          polylines = {}; // 기존 경로 선 제거
+          scheduleList = [];
+          drawnScheduleId = null;
+
+          final firstPlace = documents.first;
+          final double lat = double.parse(firstPlace['y']);
+          final double lng = double.parse(firstPlace['x']);
+          final LatLng searchedLatLng = LatLng(lat, lng);
+
+          currentCenter = searchedLatLng;
+          selectedLocationName = firstPlace['place_name'];
+
+          markers = documents.map<Marker>((place) {
+            return Marker(
+              markerId: 'kakao_${place['id']}',
+              latLng: LatLng(
+                double.parse(place['y']),
+                double.parse(place['x']),
+              ),
+            );
+          }).toSet();
+
+          _kakaoMapController?.setCenter(searchedLatLng);
+          return true;
+        }
+      } else {
+        debugPrint('검색 실패 코드: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('위치 검색 오류: $e');
+    }
+    return false;
+  }
+
   Future<void> fetchPlaceDetail(String placeName, LatLng latLng) async {
     isLoadingPlaceDetail = true;
     selectedPlaceDetail = null;
     notifyListeners();
 
-    // 💡 서비스 클래스로 깔끔하게 호출
     final result = await KakaoApiService.fetchPlaceDetail(placeName, latLng);
 
     if (result != null) {
@@ -101,31 +288,27 @@ class MapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // 🎨 Flutter 위젯을 커스텀 마커 이미지(Uint8List)로 변환
+  /// 방문 순서 숫자가 박힌 원형 마커 이미지를 만들어 캐시함.
   Future<Uint8List> _createCustomMarkerBitmap(int order) async {
-    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
-    final ui.Canvas canvas = ui.Canvas(pictureRecorder);
-    const double size = 90.0; // 마커 크기
-
     if (_markerBitmapCache.containsKey(order)) {
       return _markerBitmapCache[order]!; // 이미 만든 마커면 재사용!
     }
 
-    // 1. 그림자 그리기
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final ui.Canvas canvas = ui.Canvas(pictureRecorder);
+    const double size = 90.0; // 마커 크기
+
     final Paint shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.25)
+      ..color = Colors.black.withValues(alpha: 0.25)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
     canvas.drawCircle(const Offset(size / 2, size / 2 + 2), 22, shadowPaint);
 
-    // 2. 테두리 (흰색 배경)
     final Paint whiteBorderPaint = Paint()..color = Colors.white;
     canvas.drawCircle(const Offset(size / 2, size / 2), 22, whiteBorderPaint);
 
-    // 3. 메인 주황색 원 (#C85A32)
     final Paint mainCirclePaint = Paint()..color = const Color(0xFFC85A32);
     canvas.drawCircle(const Offset(size / 2, size / 2), 18, mainCirclePaint);
 
-    // 4. 숫자 텍스트 그리기
     final TextPainter textPainter = TextPainter(
       textDirection: TextDirection.ltr,
     );
@@ -143,7 +326,6 @@ class MapController extends ChangeNotifier {
       Offset((size - textPainter.width) / 2, (size - textPainter.height) / 2),
     );
 
-    // 5. 이미지 추출
     final ui.Image image = await pictureRecorder.endRecording().toImage(
       size.toInt(),
       size.toInt(),
@@ -158,39 +340,47 @@ class MapController extends ChangeNotifier {
     return bytes;
   }
 
-  // 📡 실제 백엔드 스케줄 API 연동 및 자동 그리기
   Future<void> fetchAndDrawSchedule(int scheduleId) async {
     isLoadingSchedule = true;
     lastAttemptedScheduleId = '$scheduleId';
+    // 이전 마커/경로가 새 여정과 섞이지 않게 먼저 비움.
+    polylines = {};
+    markers = {};
+    selectedScheduleItem = null;
     notifyListeners();
 
-    final data = await ScheduleApiService.fetchScheduleDetail(scheduleId);
-
-    if (data == null) {
-      debugPrint('⚠️ 일정 데이터를 불러오지 못했습니다.');
+    ScheduleDetail detail;
+    try {
+      detail = await ScheduleApiService.fetchScheduleDetail(scheduleId);
+    } on ScheduleApiException catch (e) {
+      debugPrint('⚠️ 일정 데이터를 불러오지 못했습니다: $e');
+      scheduleError = e;
       isLoadingSchedule = false;
       notifyListeners();
       return;
     }
 
-    if (data['memory_place'] != null && data['memory_place']['name'] != null) {
-      selectedLocationName = data['memory_place']['name'];
-    } else {
-      selectedLocationName = data['title'] ?? '알 수 없는 위치';
+    scheduleError = null;
+    drawnScheduleId = scheduleId;
+    hasSavedSchedule = true;
+    final memoryPlace = detail.memoryPlace;
+    selectedLocationName =
+        (memoryPlace != null && memoryPlace.name.isNotEmpty) ? memoryPlace.name : detail.title;
+
+    transportType = detail.isWalking ? '도보' : '차';
+
+    // 좌표가 없는 장소는 지도에 찍을 수 없으므로 경로에서 제외.
+    scheduleList = detail.routePlaces;
+    final dropped = detail.places.length - scheduleList.length;
+    if (dropped > 0) {
+      debugPrint('⚠️ 좌표가 없어 지도에서 제외한 장소 $dropped곳');
     }
-
-    transportType = (data['mobility_mode'] == 'WALK') ? '도보' : '차';
-
-    final List<dynamic> placesJson = data['places'] ?? [];
-    scheduleList =
-        placesJson.map((item) => ScheduleItem.fromJson(item)).toList()
-          ..sort((a, b) => a.visitOrder.compareTo(b.visitOrder));
 
     isLoadingSchedule = false;
 
     if (scheduleList.isNotEmpty) {
-      List<LatLng> points = scheduleList
-          .map((item) => LatLng(item.latitude, item.longitude))
+      final points = scheduleList
+          .map((item) => LatLng(item.latitude!, item.longitude!))
           .toList();
       await drawScheduleRoute(points);
     } else {
@@ -198,22 +388,21 @@ class MapController extends ChangeNotifier {
     }
   }
 
-  // 가장 최근에 AI로 생성한 스케줄(있다면)을 불러와서 지도에 그려줌.
-  // 아직 만든 스케줄이 없으면 lastAttemptedScheduleId가 null로 남아있어서
-  // 화면에서 '아직 스케줄이 없어요' 안내(에러 아님)로 구분해서 보여줄 수 있음.
-  Future<void> fetchAndDrawLastSchedule() async {
-    final lastId = await ApiService.getLastScheduleId();
-    if (lastId == null) return;
-    final id = int.tryParse(lastId);
-    if (id == null) return;
-    await fetchAndDrawSchedule(id);
+  /// 마지막으로 만든 스케줄을 그림. 만든 적이 없으면 false를 돌려줌.
+  Future<bool> fetchAndDrawLastSchedule() async {
+    final lastId = await ScheduleApiService.getLastScheduleId();
+    hasSavedSchedule = lastId != null;
+    if (lastId == null) {
+      notifyListeners();
+      return false;
+    }
+    await fetchAndDrawSchedule(lastId);
+    return true;
   }
 
-  // 🚗 길찾기 경로 및 마커 생성
   Future<void> drawScheduleRoute(List<LatLng> schedulePoints) async {
     if (schedulePoints.isEmpty) return;
 
-    // 1. 마커 생성 (기존 비트맵 캐시 로직 동일)
     final List<Marker> customMarkers = [];
     for (int i = 0; i < schedulePoints.length; i++) {
       final orderNumber = i + 1;
@@ -234,14 +423,16 @@ class MapController extends ChangeNotifier {
     }
     markers = customMarkers.toSet();
 
-    // 2. 💡 서비스 클래스를 활용한 구간별 길찾기 경로 생성
+    // 카카오 길찾기는 자동차 기준이라, 도보는 직선으로 연결함.
     List<LatLng> fullPathCoordinates = [];
-    for (int i = 0; i < schedulePoints.length - 1; i++) {
-      final routePoints = await KakaoApiService.fetchRoutePoints(
-        schedulePoints[i],
-        schedulePoints[i + 1],
-      );
-      fullPathCoordinates.addAll(routePoints);
+    if (transportType != '도보') {
+      for (int i = 0; i < schedulePoints.length - 1; i++) {
+        final routePoints = await KakaoApiService.fetchRoutePoints(
+          schedulePoints[i],
+          schedulePoints[i + 1],
+        );
+        fullPathCoordinates.addAll(routePoints);
+      }
     }
 
     final finalPoints = fullPathCoordinates.isNotEmpty
@@ -262,61 +453,7 @@ class MapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // 🔍 카카오 REST API를 직접 호출하는 키워드 검색
-  Future<void> searchAndMoveLocation(String keyword) async {
-    if (keyword.isEmpty) return;
-
-    final url = Uri.parse(
-      'https://dapi.kakao.com/v2/local/search/keyword.json?query=${Uri.encodeComponent(keyword)}',
-    );
-
-    try {
-      final response = await http.get(
-        url,
-        headers: {
-          'Authorization': 'KakaoAK ${dotenv.env['KAKAO_REST_API_KEY']}',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final List documents = data['documents'];
-
-        if (documents.isNotEmpty) {
-          polylines.clear(); // 기존 경로 선 제거
-
-          final firstPlace = documents.first;
-          final double lat = double.parse(firstPlace['y']);
-          final double lng = double.parse(firstPlace['x']);
-          final LatLng searchedLatLng = LatLng(lat, lng);
-
-          currentCenter = searchedLatLng;
-          selectedLocationName = firstPlace['place_name'];
-
-          // 검색 결과 장소들에 마커 추가
-          markers = documents.map((place) {
-            return Marker(
-              markerId: place['id'],
-              latLng: LatLng(
-                double.parse(place['y']),
-                double.parse(place['x']),
-              ),
-            );
-          }).toSet();
-
-          // 지도 카메라 이동
-          _kakaoMapController?.setCenter(searchedLatLng);
-          notifyListeners();
-        }
-      } else {
-        debugPrint('검색 실패 코드: ${response.statusCode}');
-      }
-    } catch (e) {
-      debugPrint('위치 검색 오류: $e');
-    }
-  }
-
-  // 📐 카메라 영역 자동 맞춤 계산 (중심점 및 레벨 조절)
+  /// 모든 좌표가 화면에 들어오도록 중심과 확대 레벨을 맞춤.
   void fitBounds(List<LatLng> points) {
     if (points.isEmpty || _kakaoMapController == null) return;
 
@@ -332,11 +469,9 @@ class MapController extends ChangeNotifier {
       if (p.longitude > maxLng) maxLng = p.longitude;
     }
 
-    // 1. 중심점 계산 및 이동
     currentCenter = LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2);
     _kakaoMapController?.setCenter(currentCenter);
 
-    // 2. 좌표간 거리에 따른 적절한 지도 레벨(확대/축소) 계산
     double latDiff = (maxLat - minLat).abs();
     double lngDiff = (maxLng - minLng).abs();
     double maxDiff = latDiff > lngDiff ? latDiff : lngDiff;
@@ -359,7 +494,6 @@ class MapController extends ChangeNotifier {
     _kakaoMapController?.setLevel(level);
   }
 
-  // 📍 마커 터치 처리
   void onMarkerTapped(String markerId) {
     if (markerId.startsWith('schedule_')) {
       final indexStr = markerId.replaceFirst('schedule_', '');
@@ -368,5 +502,24 @@ class MapController extends ChangeNotifier {
         selectPlace(scheduleList[index]);
       }
     }
+  }
+
+  /// 마커 id('schedule_{i}' / 'nearby_{i}' / 'anchor')로 장소 이름을 되찾음.
+  String resolveMarkerTitle(String markerId) {
+    if (markerId.startsWith('schedule_')) {
+      final index = int.tryParse(markerId.replaceFirst('schedule_', ''));
+      if (index != null && index >= 0 && index < scheduleList.length) {
+        return scheduleList[index].title;
+      }
+    } else if (markerId.startsWith('nearby_')) {
+      final index = int.tryParse(markerId.replaceFirst('nearby_', ''));
+      final places = nearbyPlaces;
+      if (index != null && index >= 0 && index < places.length) {
+        return places[index].title;
+      }
+    } else if (markerId == 'anchor') {
+      return nearbyResult?.anchor.title ?? selectedLocationName;
+    }
+    return '선택한 장소';
   }
 }

@@ -59,7 +59,7 @@ class KakaoApiService {
     return [];
   }
 
-  /// 🔍 장소 이름 및 좌표 기반 카카오 상세 정보 조회
+  /// 장소 이름과 좌표로 카카오 상세 정보를 조회.
   static Future<Map<String, dynamic>?> fetchPlaceDetail(
     String placeName,
     LatLng latLng,
