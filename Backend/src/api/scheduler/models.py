@@ -1,7 +1,9 @@
 import enum
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Enum
-from sqlalchemy.sql import func
+
+from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+
 from core.database import Base
 
 
@@ -40,8 +42,9 @@ class Scheduler(Base):
     title = Column(String(100), nullable=False)
 
     # [추가된 LLM 프롬프트용 데이터들]
-    mobility_mode = Column(Enum(MobilityMode, native_enum=False, length=50), nullable=False)
-
+    mobility_mode = Column(
+        Enum(MobilityMode, native_enum=False, length=50), nullable=False
+    )
 
     search_radius = Column(Float, nullable=False, comment="탐색 반경 (단위: km)")
     trip_type = Column(Enum(TripType, native_enum=False, length=50), nullable=False)
@@ -49,16 +52,28 @@ class Scheduler(Base):
     # memory_places 테이블이랑 연결 (추억의 장소가 스케줄의 중심점 역할)
     memory_place_id = Column(Integer, ForeignKey("memory_places.id"), nullable=True)
 
-    companion_type = Column(Enum(CompanionType, native_enum=False, length=50), nullable=False)
+    companion_type = Column(
+        Enum(CompanionType, native_enum=False, length=50), nullable=False
+    )
     companion_count = Column(Integer, nullable=False, default=1)
 
-    start_datetime = Column(DateTime(timezone=True), nullable=False, comment="여행 시작 일시")
-    end_datetime = Column(DateTime(timezone=True), nullable=False, comment="여행 종료 일시")
+    start_datetime = Column(
+        DateTime(timezone=True), nullable=False, comment="여행 시작 일시"
+    )
+    end_datetime = Column(
+        DateTime(timezone=True), nullable=False, comment="여행 종료 일시"
+    )
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # 관계 설정
-    places = relationship("SchedulerPlace", back_populates="scheduler", cascade="all, delete-orphan")
+    memory_place = relationship("MemoryPlace")
+    places = relationship(
+        "SchedulerPlace",
+        back_populates="scheduler",
+        cascade="all, delete-orphan",
+        order_by="(SchedulerPlace.day_no, SchedulerPlace.visit_order)",
+    )
 
 
 # 2. 스케줄러 세부 장소 및 순서
@@ -66,12 +81,21 @@ class SchedulerPlace(Base):
     __tablename__ = "scheduler_places"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    scheduler_id = Column(Integer, ForeignKey("schedulers.id", ondelete="CASCADE"), nullable=False)
+    scheduler_id = Column(
+        Integer, ForeignKey("schedulers.id", ondelete="CASCADE"), nullable=False
+    )
     place_id = Column(Integer, ForeignKey("places.id"), nullable=False)
 
     # [추가된 세부 일정 데이터]
-    day_no = Column(Integer, nullable=False, default=1, comment="몇 일차인지 (당일치기는 무조건 1)")
-    time_slot = Column(Enum(TimeSlot, native_enum=False, length=50), nullable=True, comment="시간대 (아침, 점심, 저녁 등)")
+    day_no = Column(
+        Integer, nullable=False, default=1, comment="몇 일차인지 (당일치기는 무조건 1)"
+    )
+    time_slot = Column(
+        Enum(TimeSlot, native_enum=False, length=50),
+        nullable=True,
+        comment="시간대 (아침, 점심, 저녁 등)",
+    )
     visit_order = Column(Integer, nullable=False, comment="해당 일차의 방문 순서")
 
     scheduler = relationship("Scheduler", back_populates="places")
+    place = relationship("Place")
