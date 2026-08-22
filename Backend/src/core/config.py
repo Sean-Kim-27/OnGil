@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     GOOGLE_CLIENT_ID: str = Field(min_length=10)
     KAKAO_APP_ID: int = Field(gt=0)
-    KAKAO_REST_API_KEY: str | None = None
+    KAKAO_REST_API_KEY: SecretStr | None = None
     JWT_SECRET_KEY: SecretStr = Field(min_length=32)
 
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, ge=5, le=60)
