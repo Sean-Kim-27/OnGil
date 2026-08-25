@@ -110,7 +110,13 @@ class MemoryPlace {
 
 /// `GET /schedulers/{id}`의 places[] 한 항목.
 class SchedulePlace {
+  /// scheduler_places 행의 id. 일정에서 장소를 뺄 때 씀.
   final int id;
+
+  /// places 테이블의 내부 PK. 방명록 API가 요구하는 값이라 id와 꼭 구분해야 함.
+  /// (TourAPI content_id가 아님)
+  final int placeId;
+
   final int visitOrder;
 
   /// 며칠째인지. 서버가 안 보낼 수 있어 nullable.
@@ -129,6 +135,7 @@ class SchedulePlace {
 
   const SchedulePlace({
     required this.id,
+    this.placeId = 0,
     required this.visitOrder,
     this.dayNo,
     this.timeSlot,
@@ -142,6 +149,9 @@ class SchedulePlace {
   });
 
   bool get hasCoordinates => latitude != null && longitude != null;
+
+  /// 방명록 API를 호출할 수 있는 장소인지.
+  bool get hasPlaceId => placeId > 0;
 
   factory SchedulePlace.fromJson(Map<String, dynamic> json) {
     _reportUnknownKeys('SchedulePlace', json, const {
@@ -161,8 +171,19 @@ class SchedulePlace {
       }
     }
 
+    // place_id는 최상위에 오고, 없으면 중첩 place 객체의 id가 같은 값이다.
+    // 평탄화된 응답에서는 json['id']가 scheduler_place의 id라 대체값으로 쓰면 안 됨.
+    final placeId = _toInt(json['place_id']) ??
+        (nested is Map<String, dynamic> ? _toInt(nested['id']) : null) ??
+        0;
+
+    if (kDebugMode && placeId == 0) {
+      debugPrint('⚠️ [SchedulePlace] place_id를 못 찾음. 이 장소는 방명록을 쓸 수 없음.');
+    }
+
     return SchedulePlace(
       id: _toInt(json['id']) ?? 0,
+      placeId: placeId,
       visitOrder: _toInt(json['visit_order']) ?? 0,
       dayNo: _toInt(json['day_no']),
       timeSlot: _toStringOrNull(json['time_slot']),
@@ -305,9 +326,18 @@ class ScheduleDetail {
   }
 
   /// 지도에 그릴 수 있는(좌표가 있는) 장소만 방문 순서대로.
+  ///
+  /// visit_order는 '해당 일차의' 순서라서 1박 2일이면 1,2,3 / 1,2,3 처럼 반복된다.
+  /// visitOrder만 보고 정렬하면 이틀치 경로가 뒤섞이므로 day_no를 먼저 본다.
   List<SchedulePlace> get routePlaces =>
-      (places.where((p) => p.hasCoordinates).toList()
-        ..sort((a, b) => a.visitOrder.compareTo(b.visitOrder)));
+      (places.where((p) => p.hasCoordinates).toList()..sort(compareByDayAndOrder));
+
+  /// day_no → visit_order 순으로 비교. day_no가 없으면 1일차로 본다.
+  static int compareByDayAndOrder(SchedulePlace a, SchedulePlace b) {
+    final byDay = (a.dayNo ?? 1).compareTo(b.dayNo ?? 1);
+    if (byDay != 0) return byDay;
+    return a.visitOrder.compareTo(b.visitOrder);
+  }
 
   factory ScheduleDetail.fromJson(Map<String, dynamic> json) {
     _reportUnknownKeys('ScheduleDetail', json, const {

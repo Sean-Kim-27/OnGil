@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import '../models/schedule.dart';
+import 'api_config.dart';
 import 'auth_service.dart';
 import 'place_service.dart';
 
@@ -63,7 +63,7 @@ class ScheduleApiException implements Exception {
     }
   }
 
-  /// 재시도 버튼을 보여줄지.
+  /// 재시도 버튼을 보여주기
   bool get isRetryable =>
       kind == ScheduleApiErrorKind.network ||
       kind == ScheduleApiErrorKind.timeout ||
@@ -77,18 +77,12 @@ class ScheduleApiException implements Exception {
 class ScheduleApiService {
   ScheduleApiService._();
 
-  static const String _defaultHost = '';
   static const Duration _timeout = Duration(seconds: 15);
 
   static const _storage = FlutterSecureStorage();
   static const _lastScheduleIdKey = 'last_schedule_id';
 
-  static String get _baseUrl {
-    var host = dotenv.env['BASE_URL'] ?? _defaultHost;
-    if (host.isEmpty) host = _defaultHost;
-    if (host.endsWith('/')) host = host.substring(0, host.length - 1);
-    return host.endsWith('/api/v1') ? host : '$host/api/v1';
-  }
+  static String get _baseUrl => ApiConfig.baseUrl;
 
   // -------------------------------------------------------------------------
   // 공용 요청 처리
@@ -201,7 +195,9 @@ class ScheduleApiService {
 
   /// POST /api/v1/schedulers
   ///
-  /// 방문 순서·시간대는 서버가 자동 배정하므로 places[]에 담아 보내지 않음.
+  /// 스펙상 places[]의 각 항목은 SchedulerPlaceCreateRequest 이고
+  /// `required: ["place", "visit_order"]` 다. 즉 장소 값은 `place` 안에 넣어야 하고
+  /// 방문 순서는 **프론트가 정해서** 보내야 한다. 서버가 자동 배정해주지 않는다.
   static Future<ScheduleDetail> createSchedule({
     required List<RecommendedPlace> places,
     required PlaceAnchor anchor,
@@ -235,6 +231,12 @@ class ScheduleApiService {
         detail: '기준 장소(anchor)에 좌표가 없음',
       );
     }
+    if (places.isEmpty) {
+      throw const ScheduleApiException(
+        ScheduleApiErrorKind.badRequest,
+        detail: 'places가 비어 있음 (서버 minItems: 1)',
+      );
+    }
 
     final url = Uri.parse('$_baseUrl/schedulers');
     final requestBody = {
@@ -248,19 +250,10 @@ class ScheduleApiService {
         'latitude': anchor.latitude,
         'longitude': anchor.longitude,
       },
-      'places': places
-          .map((p) => {
-                'content_id': p.contentId,
-                'title': p.title,
-                // 한글 category는 되돌릴 수 없어 원본 영문값을 그대로 보냄.
-                'category': p.rawCategory,
-                'latitude': p.latitude,
-                'longitude': p.longitude,
-                if (p.imageUrl != null) 'image_url': p.imageUrl,
-                if (p.kakaoPlaceId != null) 'kakao_place_id': p.kakaoPlaceId,
-                if (p.placeUrl != null) 'place_url': p.placeUrl,
-              })
-          .toList(),
+      'places': buildPlacesPayload(
+        places,
+        dayCount: dayCountOf(startDateTime, endDateTime),
+      ),
       'companion_type': companionType,
       'companion_count': companionCount,
       'start_datetime': startDateTime.toUtc().toIso8601String(),
@@ -279,6 +272,70 @@ class ScheduleApiService {
         return ScheduleDetail.fromJson(data);
       },
     );
+  }
+
+  /// 시작·종료 날짜로 며칠짜리 여정인지 계산. 최소 1일.
+  static int dayCountOf(DateTime start, DateTime end) {
+    final s = DateTime(start.year, start.month, start.day);
+    final e = DateTime(end.year, end.month, end.day);
+    final nights = e.difference(s).inDays;
+    return nights > 0 ? nights + 1 : 1;
+  }
+
+  /// 사용자가 고른 순서를 그대로 방문 순서로 쓰고, 일수에 맞춰 날짜별로 나눈다.
+  ///
+  /// - `visit_order`는 **일차별로 1부터** 다시 시작한다 (스펙: "해당 일차의 방문 순서").
+  /// - 숙소는 그날의 마지막 순서로 밀어둔다. 자고 나서 다음 일정이 오는 게 자연스러움.
+  /// - 좌표 기반 최단경로 재정렬은 아직 안 함. 필요하면 여기만 바꾸면 된다.
+  static List<Map<String, dynamic>> buildPlacesPayload(
+    List<RecommendedPlace> places, {
+    int dayCount = 1,
+  }) {
+    final days = dayCount < 1 ? 1 : dayCount;
+
+    // 일차별로 고르게 나눔. 앞쪽 날에 한 곳씩 더 배치.
+    final perDay = <List<RecommendedPlace>>[for (var i = 0; i < days; i++) []];
+    final base = places.length ~/ days;
+    final remainder = places.length % days;
+
+    var cursor = 0;
+    for (var d = 0; d < days; d++) {
+      final take = base + (d < remainder ? 1 : 0);
+      perDay[d] = places.sublist(cursor, cursor + take);
+      cursor += take;
+    }
+
+    final payload = <Map<String, dynamic>>[];
+    for (var d = 0; d < days; d++) {
+      final dayPlaces = [...perDay[d]];
+      // 숙소를 그날 맨 뒤로.
+      dayPlaces.sort((a, b) {
+        final aStay = a.rawCategory == 'accommodation' ? 1 : 0;
+        final bStay = b.rawCategory == 'accommodation' ? 1 : 0;
+        return aStay.compareTo(bStay);
+      });
+
+      for (var i = 0; i < dayPlaces.length; i++) {
+        final p = dayPlaces[i];
+        payload.add({
+          'place': {
+            'content_id': p.contentId,
+            'title': p.title,
+            // 한글 category는 되돌릴 수 없어 원본 영문값을 그대로 보냄.
+            'category': p.rawCategory,
+            'latitude': p.latitude,
+            'longitude': p.longitude,
+            if (p.imageUrl != null) 'image_url': p.imageUrl,
+            if (p.kakaoPlaceId != null) 'kakao_place_id': p.kakaoPlaceId,
+            if (p.placeUrl != null) 'place_url': p.placeUrl,
+          },
+          'day_no': d + 1,
+          'visit_order': i + 1,
+          // time_slot은 보내지 않는다(nullable). 서버가 채워주는지 확인 필요.
+        });
+      }
+    }
+    return payload;
   }
 
   /// DELETE /api/v1/schedulers/{id} → 204 No Content

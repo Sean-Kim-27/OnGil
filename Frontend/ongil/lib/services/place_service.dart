@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'api_config.dart';
 import 'auth_service.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-
+import 'package:flutter/foundation.dart';
 const Map<String, String> _categoryLabelMap = {
   'restaurant': '음식',
   'cafe': '카페',
@@ -93,6 +93,17 @@ class RecommendedPlace {
 
   bool get hasCoordinates => latitude != null && longitude != null;
 
+  /// 장소 선택을 기억할 때 쓰는 안정적인 키.
+  ///
+  /// 예전에는 title로 선택을 관리했는데, 같은 이름의 장소가 둘 이상이면
+  /// 하나만 골라도 전부 선택된 것으로 잡혔다. content_id가 정답이고,
+  /// 혹시 없을 때만 좌표를 섞어 대체 키를 만든다.
+  String get selectionKey {
+    final id = contentId;
+    if (id != null && id.isNotEmpty) return 'cid:$id';
+    return 'xy:$title@$latitude,$longitude';
+  }
+
   factory RecommendedPlace.fromJson(Map<String, dynamic> json) {
     final rawCategory = json['category'] as String? ?? 'other';
     final relatedCategory = json['related_category'] as String?;
@@ -111,7 +122,9 @@ class RecommendedPlace {
       longitude: _toDouble(json['longitude'] ?? json['lng'] ?? json['lon'] ?? json['x']),
       
       imageUrl: (json['image_url'] as String?) ?? (json['thumbnail_url'] as String?),
-      kakaoPlaceId: (json['kakao_place_id'] as String?) ?? (json['id']?.toString()),
+      // nearby 응답(NearbyPlace)에는 id도 kakao_place_id도 없다.
+      // 카카오 장소 id는 /places/kakao-links/resolve 로 따로 받아야 함.
+      kakaoPlaceId: json['kakao_place_id'] as String?,
       placeUrl: (json['place_url'] as String?) ?? (json['url'] as String?),
       contentId: (json['content_id'])?.toString(),
     );
@@ -153,11 +166,16 @@ class PlaceService {
   static final PlaceService instance = PlaceService._();
 
   final _storage = const FlutterSecureStorage();
-  static String _base() =>
-      (dotenv.env['BASE_URL'] ?? '').replaceAll(RegExp(r'/$'), '');
-  static String get _nearbyUrl => '${_base()}/api/v1/places/nearby';
+
+  // 예전에는 여기서만 BASE_URL을 따로 손질했다. .env에 `/api/v1`까지 적혀 있으면
+  // `/api/v1/api/v1/places/nearby`가 만들어져 전부 404였다. ApiConfig로 통일.
+  static String get _nearbyUrl => '${ApiConfig.baseUrl}/places/nearby';
   static String get _kakaoLinksResolveUrl =>
-      '${_base()}/api/v1/places/kakao-links/resolve';
+      '${ApiConfig.baseUrl}/places/kakao-links/resolve';
+
+  /// 서버 SearchRadiusMeters enum은 3000 / 5000 두 값만 받는다.
+  /// clamp(3000, 5000)만 하면 4000 같은 값이 그대로 통과해 422가 났다.
+  static int _snapRadius(int radiusM) => radiusM <= 4000 ? 3000 : 5000;
 
   Future<void> saveLastAddress(String address) async {
     await _storage.write(key: 'lastSearchedAddress', value: address);
@@ -171,15 +189,19 @@ class PlaceService {
     String query, {
     int radiusM = 5000,
   }) async {
-    final clampedRadius = radiusM.clamp(3000, 5000).toInt();
     final uri = Uri.parse(_nearbyUrl).replace(queryParameters: {
       'query': query,
-      'radius_m': clampedRadius.toString(),
+      'radius_m': _snapRadius(radiusM).toString(),
     });
 
-    try {
+     try {
+      debugPrint('[Nearby] GET $uri');
       final response = await AuthService.instance.authorizedGet(uri);
-      if (response.statusCode != 200) return null;
+      debugPrint('[Nearby] status=${response.statusCode}');
+      if (response.statusCode != 200) {
+        debugPrint('[Nearby] body=${utf8.decode(response.bodyBytes)}');
+        return null;
+      }
 
       final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
       final anchor = PlaceAnchor.fromJson(data['anchor'] as Map<String, dynamic>);
@@ -187,8 +209,10 @@ class PlaceService {
           .map((e) => RecommendedPlace.fromJson(e as Map<String, dynamic>))
           .toList();
 
+      debugPrint('[Nearby] anchor=${anchor.title} places=${places.length}');
       return NearbySearchResult(anchor: anchor, places: places);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[Nearby] 예외: $e\n$st');
       return null;
     }
   }

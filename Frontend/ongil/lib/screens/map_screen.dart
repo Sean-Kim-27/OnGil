@@ -50,6 +50,8 @@ class _MapScreenState extends State<MapScreen> {
   void initState() {
     super.initState();
     _controller.addListener(() {
+      // 경로 재생은 타이머로 자주 알림을 보내므로, 화면이 사라진 뒤 호출되지 않게 막는다.
+      if (!mounted) return;
       setState(() {});
     });
     final anchorTitle = widget.searchResult?.anchor.title;
@@ -157,6 +159,15 @@ class _MapScreenState extends State<MapScreen> {
               _showPlaceDetailBottomSheet(context, placeName, latLng);
             },
           ),
+
+          // 여정 경로 재생 컨트롤
+          if (_controller.hasPlayback)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 120,
+              child: _RoutePlaybackBar(controller: _controller),
+            ),
 
           // 상단 검색바 & 위치 뱃지
           Positioned(
@@ -630,6 +641,123 @@ class _InfoPill extends StatelessWidget {
               fontSize: 12,
               fontWeight: FontWeight.bold,
               color: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 지도 위에 뜨는 여정 경로 재생 컨트롤.
+///
+/// 재생을 누르면 저장한 방문 순서대로 지도를 따라 움직이며 보여준다.
+class _RoutePlaybackBar extends StatelessWidget {
+  final MapController controller;
+
+  const _RoutePlaybackBar({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    const primaryColor = Color(0xFFC85A32);
+
+    final label = controller.playbackLabel;
+    final total = controller.scheduleList.length;
+    final current = controller.playbackStopIndex + 1;
+    final finished = !controller.isPlayingRoute && controller.playbackProgress >= 1.0;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      controller.isPlayingRoute || controller.playbackProgress > 0
+                          ? '$current / $total번째 장소'
+                          : '여정 경로 따라가기',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF8A827A),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      label ?? '경로를 재생해보세요',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: controller.isDwelling
+                            ? primaryColor
+                            : const Color(0xFF2C2825),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (controller.playbackProgress > 0)
+                IconButton(
+                  tooltip: '처음부터',
+                  onPressed: controller.restartRoutePlayback,
+                  icon: const Icon(Icons.replay, size: 20, color: Color(0xFF8A827A)),
+                ),
+              GestureDetector(
+                onTap: () {
+                  if (controller.isPlayingRoute) {
+                    controller.pauseRoutePlayback();
+                  } else if (finished) {
+                    controller.restartRoutePlayback();
+                  } else {
+                    controller.startRoutePlayback();
+                  }
+                },
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: const BoxDecoration(
+                    color: primaryColor,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    controller.isPlayingRoute
+                        ? Icons.pause
+                        : (finished ? Icons.replay : Icons.play_arrow),
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: controller.playbackProgress,
+              minHeight: 4,
+              backgroundColor: const Color(0xFFEFEBE4),
+              valueColor: const AlwaysStoppedAnimation<Color>(primaryColor),
             ),
           ),
         ],

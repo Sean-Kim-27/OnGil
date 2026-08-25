@@ -39,7 +39,7 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
     return _allPlaces.where((p) => p.category == category).toList();
   }
 
-  int get _selectedCount => _controller.getAllSelectedPlaceIds.length;
+  int get _selectedCount => _controller.allSelectedKeys.length;
 
   @override
   void initState() {
@@ -106,10 +106,16 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
   }
 
   Future<void> _goToInfoScreen() async {
-    // 선택한 제목들을 실제 RecommendedPlace 객체로 되찾아 넘김.
-    final selectedTitles = _controller.getAllSelectedPlaceIds.toSet();
-    final selectedPlaces =
-        _allPlaces.where((p) => selectedTitles.contains(p.title)).toList();
+    // 선택 키를 실제 RecommendedPlace로 되찾아 넘김.
+    //
+    // 예전에는 title 집합으로 where 필터를 걸었는데, 그러면 결과가 _allPlaces의
+    // 원래 순서를 따라가서 '사용자가 고른 순서'가 사라졌다. 이제 그 순서가 곧
+    // 서버의 visit_order라서, 선택 키 순서대로 되짚는다.
+    final byKey = {for (final p in _allPlaces) p.selectionKey: p};
+    final selectedPlaces = <RecommendedPlace>[
+      for (final key in _controller.allSelectedKeys)
+        if (byKey[key] != null) byKey[key]!,
+    ];
 
     final anchor = _anchor;
     if (anchor == null) {
@@ -246,10 +252,12 @@ class _PlaceSelectScreenState extends State<PlaceSelectScreen> {
                           itemCount: _currentStepPlaces.length,
                           itemBuilder: (context, index) {
                             final place = _currentStepPlaces[index];
-                            final isSelected = _controller.currentStepSelectedIds.contains(place.title);
+                            final isSelected = _controller.currentStepSelectedKeys
+                                .contains(place.selectionKey);
 
                             return GestureDetector(
-                              onTap: () => _controller.togglePlaceSelection(place.title),
+                              onTap: () =>
+                                  _controller.togglePlaceSelection(place.selectionKey),
                               child: Container(
                                 margin: const EdgeInsets.only(bottom: 12),
                                 padding: const EdgeInsets.all(16),

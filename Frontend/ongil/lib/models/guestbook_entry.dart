@@ -1,38 +1,67 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 
-/// 방명록 탭에 보여줄 글 한 건. 기기 로컬(GuestbookService)에 저장됨.
-class GuestbookEntry {
-  final String id;
+import 'guestbook.dart';
 
-  /// 어떤 여정 기준으로 남긴 기억인지.
-  final int scheduleId;
+/// 방명록 탭 카드 한 장을 그리기 위한 화면용 모델.
+///
+/// 서버 응답(`Guestbook`)에는 장소 이름도 작성자도 없어서,
+/// 일정 상세의 장소 정보와 내 닉네임을 합쳐 여기서 만들어 쓴다.
+/// 장소당 한 건이므로 식별자는 [placeId].
+class GuestbookEntry {
+  /// 서버 방명록 id.
+  final int guestbookId;
+
+  /// places 테이블 PK. 모든 방명록 API의 경로 파라미터.
+  final int placeId;
 
   final String placeName;
   final String authorName;
   final String content;
   final DateTime createdAt;
 
-  /// 기기에 저장된 사진 경로. 없으면 null.
-  final String? photoPath;
+  /// 카드에 띄울 사진 URL. 지금 사진을 우선하고, 없으면 그때 사진.
+  final String? photoUrl;
+
+  /// 사진 후처리(모자이크)가 아직 안 끝난 것으로 보이는 상태.
+  final bool isPhotoProcessing;
 
   const GuestbookEntry({
-    required this.id,
-    required this.scheduleId,
+    required this.guestbookId,
+    required this.placeId,
     required this.placeName,
     required this.authorName,
     required this.content,
     required this.createdAt,
-    this.photoPath,
+    this.photoUrl,
+    this.isPhotoProcessing = false,
   });
 
-  ImageProvider? get image {
-    final path = photoPath;
-    if (path == null || path.isEmpty) return null;
-    return FileImage(File(path));
+  /// `Guestbook` + 장소 이름 + 작성자 이름 → 화면용 모델.
+  factory GuestbookEntry.from(
+    Guestbook book, {
+    required String placeName,
+    required String authorName,
+  }) {
+    final photo = book.currentPhoto ?? book.pastPhoto;
+    return GuestbookEntry(
+      guestbookId: book.id,
+      placeId: book.placeId,
+      placeName: placeName,
+      authorName: authorName,
+      content: book.content ?? '',
+      createdAt: book.createdAt,
+      photoUrl: photo?.displayUrl,
+      isPhotoProcessing: photo?.isProcessing ?? false,
+    );
   }
 
-  bool get hasPhoto => photoPath != null && photoPath!.isNotEmpty;
+  ImageProvider? get image {
+    final url = photoUrl;
+    if (url == null || url.isEmpty) return null;
+    return NetworkImage(url);
+  }
+
+  bool get hasPhoto => photoUrl != null && photoUrl!.isNotEmpty;
 
   /// "3일 전" / "2주 전" / "2026.08.15" 같은 짧은 상대 표기.
   String get relativeDate {
@@ -46,48 +75,5 @@ class GuestbookEntry {
     final m = createdAt.month.toString().padLeft(2, '0');
     final d = createdAt.day.toString().padLeft(2, '0');
     return '$y.$m.$d';
-  }
-
-  /// id/작성자/작성시각은 유지하고 내용만 바꿈.
-  GuestbookEntry copyWith({
-    String? placeName,
-    String? content,
-    String? photoPath,
-    bool clearPhoto = false,
-  }) {
-    return GuestbookEntry(
-      id: id,
-      scheduleId: scheduleId,
-      placeName: placeName ?? this.placeName,
-      authorName: authorName,
-      content: content ?? this.content,
-      createdAt: createdAt,
-      photoPath: clearPhoto ? null : (photoPath ?? this.photoPath),
-    );
-  }
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'schedule_id': scheduleId,
-        'place_name': placeName,
-        'author_name': authorName,
-        'content': content,
-        'created_at': createdAt.toIso8601String(),
-        'photo_path': photoPath,
-      };
-
-  factory GuestbookEntry.fromJson(Map<String, dynamic> json) {
-    return GuestbookEntry(
-      id: (json['id'] ?? '').toString(),
-      scheduleId: int.tryParse('${json['schedule_id']}') ?? 0,
-      placeName: (json['place_name'] ?? '').toString(),
-      authorName: (json['author_name'] ?? '나').toString(),
-      content: (json['content'] ?? '').toString(),
-      createdAt:
-          DateTime.tryParse('${json['created_at']}')?.toLocal() ?? DateTime.now(),
-      photoPath: (json['photo_path'] as String?)?.trim().isEmpty ?? true
-          ? null
-          : json['photo_path'] as String,
-    );
   }
 }

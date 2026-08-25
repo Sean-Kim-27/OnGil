@@ -8,7 +8,14 @@ class HomeTabIntent {
   /// 지도 탭에서 그려줄 여정 id. 없으면 기존 상태 유지.
   final int? focusScheduleId;
 
-  const HomeTabIntent({required this.tabIndex, this.focusScheduleId});
+  /// 방명록 탭 안에서 열 하위 탭. 0:방명록 1:아카이브. null이면 기본값(0).
+  final int? guestbookTabIndex;
+
+  const HomeTabIntent({
+    required this.tabIndex,
+    this.focusScheduleId,
+    this.guestbookTabIndex,
+  });
 }
 
 class AppShellController extends ChangeNotifier {
@@ -34,8 +41,13 @@ class AppShellController extends ChangeNotifier {
     BuildContext context, {
     required int tabIndex,
     int? focusScheduleId,
+    int? guestbookTabIndex,
   }) {
-    request(HomeTabIntent(tabIndex: tabIndex, focusScheduleId: focusScheduleId));
+    request(HomeTabIntent(
+      tabIndex: tabIndex,
+      focusScheduleId: focusScheduleId,
+      guestbookTabIndex: guestbookTabIndex,
+    ));
     Navigator.of(context).popUntil(
       (route) => route.settings.name == '/home' || route.isFirst,
     );

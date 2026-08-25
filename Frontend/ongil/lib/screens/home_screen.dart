@@ -32,6 +32,9 @@ class _HomeScreenState extends State<HomeScreen> {
   /// 지도 탭에 그려달라고 넘길 여정 id.
   int? _focusScheduleId;
 
+  /// 방명록 탭을 열 때 어느 하위 탭으로 갈지. 0:방명록 1:아카이브.
+  int _guestbookTabIndex = 0;
+
   final _addressCtrl = TextEditingController();
   bool _isSearching = false;
   NearbySearchResult? _searchResult;
@@ -80,6 +83,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _navIndex = intent.tabIndex;
       if (intent.focusScheduleId != null) {
         _focusScheduleId = intent.focusScheduleId;
+      }
+      if (intent.guestbookTabIndex != null) {
+        _guestbookTabIndex = intent.guestbookTabIndex!;
       }
     });
   }
@@ -142,6 +148,14 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  /// 홈의 '그때와 지금' 카드 → 방명록 탭의 아카이브.
+  void _openArchive() {
+    setState(() {
+      _navIndex = 3;
+      _guestbookTabIndex = 1;
+    });
+  }
+
   void _openRecommendationList() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => RecommendationListScreen(searchResult: _searchResult)),
@@ -159,7 +173,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case 1:
         return const ScheduleListScreen();
       case 3:
-        return const GuestbookScreen();
+        return GuestbookScreen(initialTabIndex: _guestbookTabIndex);
       case 2:
       default:
         return _buildHomeContent(context);
@@ -202,6 +216,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       : '근처 추천 장소를 찾지 못했어요')
                   : null,
               image: _searchResult?.heroImage,
+              onTap: _openArchive,
             ),
             const SizedBox(height: AppSpacing.cardGap),
             QuickActionCards(
@@ -289,6 +304,8 @@ class _HomeScreenState extends State<HomeScreen> {
             setState(() {
               // 직접 탭을 누르면 '특정 여정 경로 보기' 요청은 해제.
               _focusScheduleId = null;
+              // 하단 탭으로 방명록을 열면 기본 탭(글 목록)에서 시작.
+              if (i == 3) _guestbookTabIndex = 0;
               _navIndex = i;
             });
           }

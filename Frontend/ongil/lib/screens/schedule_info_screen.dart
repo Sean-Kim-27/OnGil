@@ -21,10 +21,17 @@ class _ScheduleInfoScreenState extends State<ScheduleInfoScreen> {
   static const bgColor = Color(0xFFFAF7F2);
 
   late final TextEditingController _titleCtrl;
-  String _mobilityMode = 'WALK'; // map_controller.dart 기존 코드로 확인된 값
-  int _searchRadius = 3; // SearchRadiusKm enum: 3 또는 5만 허용
-  final String _companionType = 'SOLO'; // 확인된 값만 사용
+  String _mobilityMode = 'WALK'; // MobilityMode enum: WALK 또는 CAR
+  // 홈/지도의 nearby 검색이 기본 5km로 도니 여기 기본값도 5km로 맞춘다.
+  // (예전 기본값 3km는 실제 검색 반경과 달라서, 저장된 일정의 반경이 사실과 달랐다.)
+  int _searchRadius = 5; // SearchRadiusKm enum: 3 또는 5만 허용
+
   int _companionCount = 1;
+
+  /// 서버 `companion_type`은 필수값(CompanionType enum)이라 반드시 보내야 한다.
+  /// 화면에서는 인원 수만 받으므로 인원에서 자동으로 도출한다.
+  /// 예전처럼 SOLO로 고정해두면 4명짜리 일정이 '혼자 4명'으로 저장된다.
+  String get _companionType => _companionCount <= 1 ? 'SOLO' : 'FRIEND';
 
   DateTime _startDateTime = DateTime.now();
   late DateTime _endDateTime;

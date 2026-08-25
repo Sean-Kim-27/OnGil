@@ -38,24 +38,60 @@ class _TermsAgreementScreenState extends State<TermsAgreementScreen> {
     setState(() => _checked[index] = value ?? false);
   }
 
+  /// 약관 전문을 보여주는 시트.
+  ///
+  /// 예전에는 Column 안에 Text를 그냥 넣어둬서, 본문이 화면보다 길면 넘쳐서
+  /// 잘렸다. 전문을 채운 지금은 전부 화면보다 길기 때문에 스크롤이 필수.
   void _showDetail(TermsItem item) {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: AppColors.cardBackground,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.cardLarge)),
       ),
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
+      builder: (sheetContext) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.75,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        builder: (_, scrollController) => SafeArea(
           child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(item.title, style: AppTextStyles.screenTitle),
-              const SizedBox(height: 12),
-              Text(item.content, style: AppTextStyles.body),
-              const SizedBox(height: 8),
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.line,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(item.title, style: AppTextStyles.screenTitle),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      icon: const Icon(Icons.close, size: 20, color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(color: AppColors.line, height: 1),
+              Expanded(
+                child: SingleChildScrollView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                  child: SelectableText(
+                    item.content,
+                    style: AppTextStyles.body.copyWith(height: 1.6),
+                  ),
+                ),
+              ),
             ],
           ),
         ),

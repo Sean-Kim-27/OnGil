@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -48,6 +49,54 @@ class MapController extends ChangeNotifier {
   Set<Polyline> polylines = {};
   List<SchedulePlace> scheduleList = [];
 
+  // ---------------------------------------------------------------------------
+  // 경로 재생 (지도 위에서 여정을 따라 움직이며 보여주기)
+  // ---------------------------------------------------------------------------
+
+  /// 재생에 쓸 전체 경로 좌표. 차량이면 도로 경로, 도보면 장소를 직선으로 이은 것.
+  List<LatLng> _playbackPath = const [];
+
+  /// _playbackPath에서 각 방문 장소가 놓인 인덱스. 도착 판정에 씀.
+  List<int> _stopIndices = const [];
+
+  Timer? _playbackTimer;
+
+  bool isPlayingRoute = false;
+
+  /// 재생이 끝난 뒤에도 컨트롤 바를 유지하기 위한 플래그.
+  bool hasPlayback = false;
+
+  /// 0.0 ~ 1.0. 진행 바에 씀.
+  double playbackProgress = 0.0;
+
+  /// 지금 향하고 있는(또는 방금 도착한) 장소의 순번. 0부터.
+  int playbackStopIndex = 0;
+
+  /// 장소에 도착해 잠시 머무는 중인지. 캡션을 강조하는 데 씀.
+  bool isDwelling = false;
+
+  /// 재생 중 화면에 띄울 현재 장소 이름.
+  String? get playbackLabel {
+    if (scheduleList.isEmpty) return null;
+    final i = playbackStopIndex.clamp(0, scheduleList.length - 1);
+    return scheduleList[i].title;
+  }
+
+  /// 전체 경로에서 지금까지 진행한 좌표 인덱스.
+  int _cursor = 0;
+
+  /// 한 프레임에 몇 개의 좌표를 건너뛸지. 경로가 길수록 크게 잡아 총 재생 시간을 맞춘다.
+  int _step = 1;
+
+  /// 도착 후 머무는 프레임 수.
+  int _dwellFrames = 0;
+
+  /// 프레임 간격. 카카오 지도는 WebView라 너무 촘촘하면 끊긴다.
+  static const Duration _frameInterval = Duration(milliseconds: 70);
+
+  /// 전체 재생 목표 시간(대략).
+  static const int _targetFrames = 200;
+
   /// markerId 'nearby_{i}' 를 되짚기 위한 목록 (nearbyResult.places 와 인덱스 동일).
   List<RecommendedPlace> get nearbyPlaces => nearbyResult?.places ?? const [];
 
@@ -59,6 +108,8 @@ class MapController extends ChangeNotifier {
   @override
   void dispose() {
     _isDisposed = true;
+    _playbackTimer?.cancel();
+    _playbackTimer = null;
     super.dispose();
   }
 
@@ -449,8 +500,244 @@ class MapController extends ChangeNotifier {
       ),
     };
 
+    // 경로 재생에 쓸 좌표를 같이 준비해둔다.
+    _preparePlayback(schedulePoints, finalPoints);
+
     fitBounds(schedulePoints);
     notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 경로 재생
+  // ---------------------------------------------------------------------------
+
+  /// 재생용 경로와 '각 장소가 경로의 몇 번째 좌표인지'를 미리 계산해둔다.
+  ///
+  /// 도로 경로(fullPath)는 장소 좌표와 정확히 일치하지 않으므로,
+  /// 장소마다 가장 가까운 경로 좌표를 찾아 도착 지점으로 삼는다.
+  void _preparePlayback(List<LatLng> stops, List<LatLng> path) {
+    stopRoutePlayback(reset: true);
+
+    if (stops.length < 2 || path.length < 2) {
+      _playbackPath = const [];
+      _stopIndices = const [];
+      hasPlayback = false;
+      return;
+    }
+
+    _playbackPath = path;
+
+    final indices = <int>[];
+    var searchFrom = 0;
+    for (var s = 0; s < stops.length; s++) {
+      if (s == 0) {
+        indices.add(0);
+        continue;
+      }
+      if (s == stops.length - 1) {
+        indices.add(path.length - 1);
+        continue;
+      }
+      // 경로를 앞에서부터 훑으며 이 장소에 가장 가까운 지점을 찾는다.
+      var bestIndex = searchFrom;
+      var bestDist = double.infinity;
+      for (var i = searchFrom; i < path.length; i++) {
+        final d = _squaredDistance(path[i], stops[s]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIndex = i;
+        }
+      }
+      indices.add(bestIndex);
+      searchFrom = bestIndex;
+    }
+
+    _stopIndices = indices;
+    // 총 재생 시간이 경로 길이와 무관하게 비슷하도록 보폭을 맞춘다.
+    _step = (path.length / _targetFrames).ceil().clamp(1, 999);
+    hasPlayback = true;
+  }
+
+  /// 위경도 차이의 제곱합. 순위 비교에만 쓰므로 실제 거리로 환산하지 않는다.
+  double _squaredDistance(LatLng a, LatLng b) {
+    final dLat = a.latitude - b.latitude;
+    final dLng = a.longitude - b.longitude;
+    return dLat * dLat + dLng * dLng;
+  }
+
+  /// 여정을 따라 움직이며 보여주기 시작.
+  Future<void> startRoutePlayback() async {
+    if (!hasPlayback || _playbackPath.length < 2) return;
+
+    // 끝까지 재생한 상태에서 다시 누르면 처음부터.
+    if (_cursor >= _playbackPath.length - 1) _cursor = 0;
+
+    isPlayingRoute = true;
+    _playbackTimer?.cancel();
+
+    await _renderPlaybackFrame();
+
+    _playbackTimer = Timer.periodic(_frameInterval, (_) async {
+      if (_isDisposed) return;
+
+      // 장소에 도착하면 잠깐 머문다.
+      if (_dwellFrames > 0) {
+        _dwellFrames--;
+        if (_dwellFrames == 0) {
+          isDwelling = false;
+          notifyListeners();
+        }
+        return;
+      }
+
+      _cursor += _step;
+
+      if (_cursor >= _playbackPath.length - 1) {
+        _cursor = _playbackPath.length - 1;
+        await _renderPlaybackFrame();
+        stopRoutePlayback();
+        return;
+      }
+
+      _updateStopProgress();
+      await _renderPlaybackFrame();
+    });
+
+    notifyListeners();
+  }
+
+  void pauseRoutePlayback() {
+    if (!isPlayingRoute) return;
+    _playbackTimer?.cancel();
+    _playbackTimer = null;
+    isPlayingRoute = false;
+    notifyListeners();
+  }
+
+  /// 재생 중지. [reset]이면 처음 상태로 되돌리고 전체 경로를 다시 그린다.
+  void stopRoutePlayback({bool reset = false}) {
+    _playbackTimer?.cancel();
+    _playbackTimer = null;
+    isPlayingRoute = false;
+    isDwelling = false;
+    _dwellFrames = 0;
+
+    if (reset) {
+      _cursor = 0;
+      playbackProgress = 0.0;
+      playbackStopIndex = 0;
+    }
+    notifyListeners();
+  }
+
+  /// 처음부터 다시.
+  Future<void> restartRoutePlayback() async {
+    _cursor = 0;
+    playbackProgress = 0.0;
+    playbackStopIndex = 0;
+    await startRoutePlayback();
+  }
+
+  /// 현재 커서가 어느 장소를 지났는지 갱신하고, 막 도착했으면 머무름을 건다.
+  void _updateStopProgress() {
+    for (var i = playbackStopIndex + 1; i < _stopIndices.length; i++) {
+      if (_cursor >= _stopIndices[i]) {
+        playbackStopIndex = i;
+        isDwelling = true;
+        // 도착 시 약 0.9초 머무름.
+        _dwellFrames = (900 / _frameInterval.inMilliseconds).round();
+      } else {
+        break;
+      }
+    }
+  }
+
+  /// 한 프레임 그리기: 지나온 경로 + 이동 마커 + 카메라 추적.
+  Future<void> _renderPlaybackFrame() async {
+    if (_playbackPath.isEmpty) return;
+
+    final index = _cursor.clamp(0, _playbackPath.length - 1);
+    final current = _playbackPath[index];
+    playbackProgress = index / (_playbackPath.length - 1);
+
+    final traveled = _playbackPath.sublist(0, index + 1);
+    final remaining = _playbackPath.sublist(index);
+
+    polylines = {
+      // 남은 경로는 흐리게 깔아두고
+      if (remaining.length > 1)
+        Polyline(
+          polylineId: 'playback_remaining',
+          points: remaining,
+          strokeColor: const Color(0xFFC85A32),
+          strokeWidth: 5,
+          strokeOpacity: 0.25,
+        ),
+      // 지나온 경로를 진하게 덮는다
+      if (traveled.length > 1)
+        Polyline(
+          polylineId: 'playback_traveled',
+          points: traveled,
+          strokeColor: const Color(0xFFC85A32),
+          strokeWidth: 6,
+          strokeOpacity: 0.95,
+        ),
+    };
+
+    final moverBytes = await _createMoverMarkerBitmap();
+    markers = {
+      ...markers.where((m) => m.markerId != 'playback_mover'),
+      Marker(
+        markerId: 'playback_mover',
+        latLng: current,
+        markerImageSrc:
+            Uri.dataFromBytes(moverBytes, mimeType: 'image/png').toString(),
+        width: 46,
+        height: 46,
+      ),
+    };
+
+    currentCenter = current;
+    _kakaoMapController?.setCenter(current);
+
+    notifyListeners();
+  }
+
+  Uint8List? _moverBitmapCache;
+
+  /// 이동 중임을 나타내는 마커. 순번 마커와 구분되도록 다른 모양으로 그린다.
+  Future<Uint8List> _createMoverMarkerBitmap() async {
+    final cached = _moverBitmapCache;
+    if (cached != null) return cached;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(recorder);
+    const double size = 92.0;
+    const center = Offset(size / 2, size / 2);
+
+    // 바깥 헤일로
+    canvas.drawCircle(
+      center,
+      30,
+      Paint()..color = const Color(0xFFC85A32).withValues(alpha: 0.18),
+    );
+    canvas.drawCircle(
+      center,
+      22,
+      Paint()..color = const Color(0xFFC85A32).withValues(alpha: 0.30),
+    );
+    // 흰 테두리 + 본체
+    canvas.drawCircle(center, 15, Paint()..color = Colors.white);
+    canvas.drawCircle(center, 11, Paint()..color = const Color(0xFFC85A32));
+
+    final image = await recorder.endRecording().toImage(
+          size.toInt(),
+          size.toInt(),
+        );
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    final bytes = byteData!.buffer.asUint8List();
+    _moverBitmapCache = bytes;
+    return bytes;
   }
 
   /// 모든 좌표가 화면에 들어오도록 중심과 확대 레벨을 맞춤.

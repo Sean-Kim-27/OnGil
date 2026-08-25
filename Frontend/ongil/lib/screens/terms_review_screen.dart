@@ -57,7 +57,10 @@ class _TermsSection extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
-        Text(item.content, style: AppTextStyles.body),
+        SelectableText(
+          item.content,
+          style: AppTextStyles.body.copyWith(height: 1.6),
+        ),
       ],
     );
   }

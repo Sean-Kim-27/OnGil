@@ -1,13 +1,15 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../controllers/app_shell_controller.dart';
+import '../models/guestbook.dart';
 import '../models/guestbook_entry.dart';
 import '../models/memory_archive_entry.dart';
 import '../models/schedule.dart';
 import '../services/auth_service.dart';
-import '../services/guestbook_service.dart';
+import '../services/guestbook_api_service.dart';
 import '../services/photo_service.dart';
 import '../services/schedule_api_service.dart';
 import '../theme/app_colors.dart';
@@ -20,105 +22,209 @@ import '../widgets/photo_source_sheet.dart';
 
 /// 방명록 화면. '방명록'(글 목록) / '아카이브'(그때-지금 사진 비교) 두 탭.
 ///
-/// 마지막으로 만든 여정을 기준으로 동작하고, 작성물은 기기에 저장됨.
+/// 서버 기준으로 방명록은 **장소(place_id)당 한 건**이고, 그 한 건이 글과 사진을
+/// 함께 들고 있다. 두 탭은 같은 레코드의 다른 단면이라, 아카이브의 메모를 고치면
+/// 방명록 탭의 글도 같이 바뀐다.
+///
+/// 서버 제약 두 가지를 화면에서도 그대로 지킨다.
+/// - 사진은 스팟당 CURRENT 1장 / PAST 1장 (교체·삭제 엔드포인트 없음)
+/// - PAST는 CURRENT가 먼저 올라가 있어야 함 → 입력 순서가 '지금 → 그때'
 class GuestbookScreen extends StatefulWidget {
-  const GuestbookScreen({super.key});
+  /// 처음 열 탭. 0:방명록 1:아카이브.
+  /// 홈의 '그때와 지금' 카드처럼 아카이브를 바로 열고 싶을 때 1을 넘긴다.
+  final int initialTabIndex;
+
+  const GuestbookScreen({super.key, this.initialTabIndex = 0});
 
   @override
   State<GuestbookScreen> createState() => _GuestbookScreenState();
 }
 
 class _GuestbookScreenState extends State<GuestbookScreen> {
-  int _tabIndex = 0; // 0: 방명록, 1: 아카이브
+  late int _tabIndex; // 0: 방명록, 1: 아카이브
 
   bool _isLoading = true;
+
+  /// 업로드/저장 중 화면을 잠그기 위한 플래그.
+  bool _isSaving = false;
 
   /// 여정을 불러오지 못했을 때의 안내 문구.
   String? _errorMessage;
 
+  /// 방명록 목록을 불러오지 못했을 때의 안내 문구.
+  String? _guestbookError;
+
   ScheduleDetail? _schedule;
   String _authorName = '나';
+
+  /// 서버에서 받은 원본을 place_id로 찾을 수 있게 들고 있음.
+  final Map<int, Guestbook> _books = {};
 
   List<GuestbookEntry> _entries = [];
   List<MemoryArchiveEntry> _archive = [];
 
-  /// 아카이브 탭에서 크게 비교 중인 장소 이름.
-  String? _featuredPlaceName;
+  /// 아카이브 탭에서 크게 비교 중인 장소.
+  int? _featuredPlaceId;
 
   @override
   void initState() {
     super.initState();
+    _tabIndex = widget.initialTabIndex == 1 ? 1 : 0;
     _load();
   }
 
-  /// 마지막 여정 + 그 여정에 남긴 방명록/아카이브를 한 번에 불러옴.
+  @override
+  void didUpdateWidget(covariant GuestbookScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 홈에서 '아카이브로 열어달라'고 다시 요청한 경우에만 탭을 옮긴다.
+    if (widget.initialTabIndex != oldWidget.initialTabIndex) {
+      setState(() => _tabIndex = widget.initialTabIndex == 1 ? 1 : 0);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 불러오기
+  // ---------------------------------------------------------------------------
+
+  /// 마지막 여정 + 내 방명록 전체를 함께 불러옴.
   Future<void> _load() async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
+      _guestbookError = null;
     });
 
     final nickname = await AuthService.instance.getNickname();
     final scheduleId = await ScheduleApiService.getLastScheduleId();
 
-    if (scheduleId == null) {
-      if (!mounted) return;
-      setState(() {
-        _schedule = null;
-        _entries = [];
-        _archive = [];
-        _authorName = (nickname == null || nickname.isEmpty) ? '나' : nickname;
-        _isLoading = false;
-      });
-      return;
-    }
-
     ScheduleDetail? detail;
-    String? error;
-    try {
-      detail = await ScheduleApiService.fetchScheduleDetail(scheduleId);
-    } on ScheduleApiException catch (e) {
-      error = e.userMessage;
-    } catch (_) {
-      error = '여정을 불러오지 못했어요. 잠시 후 다시 시도해주세요.';
+    String? scheduleError;
+    if (scheduleId != null) {
+      try {
+        detail = await ScheduleApiService.fetchScheduleDetail(scheduleId);
+      } on ScheduleApiException catch (e) {
+        scheduleError = e.userMessage;
+      } catch (_) {
+        scheduleError = '여정을 불러오지 못했어요. 잠시 후 다시 시도해주세요.';
+      }
     }
 
-    // 여정 조회가 실패해도 저장해둔 기억은 보여줄 수 있으므로 같이 읽음.
-    final entries = await GuestbookService.instance.loadEntries(scheduleId);
-    final archive = await GuestbookService.instance.loadArchive(scheduleId);
+    // 여정 조회가 실패해도 방명록은 따로 읽어둠.
+    List<Guestbook> books = const [];
+    String? bookError;
+    try {
+      books = await GuestbookApiService.fetchMyGuestbooks();
+    } on GuestbookApiException catch (e) {
+      bookError = e.userMessage;
+    } catch (_) {
+      bookError = '방명록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.';
+    }
 
     if (!mounted) return;
     setState(() {
       _schedule = detail;
-      _entries = entries;
-      _archive = archive;
-      _errorMessage = error;
+      _errorMessage = scheduleError;
+      _guestbookError = bookError;
       _authorName = (nickname == null || nickname.isEmpty) ? '나' : nickname;
+      _books
+        ..clear()
+        ..addEntries(books.map((b) => MapEntry(b.placeId, b)));
       _isLoading = false;
-      _featuredPlaceName = null;
+      _featuredPlaceId = null;
+      _rebuildViewModels();
+    });
+  }
+
+  /// 서버 원본(`_books`)에서 두 탭이 쓸 화면용 모델을 다시 만든다.
+  /// setState 안에서만 호출할 것.
+  void _rebuildViewModels() {
+    final schedule = _schedule;
+
+    final placeById = <int, SchedulePlace>{};
+    if (schedule != null) {
+      for (final p in schedule.places) {
+        if (p.hasPlaceId) placeById.putIfAbsent(p.placeId, () => p);
+      }
+    }
+
+    final memoryName = schedule?.memoryPlace?.name ?? '';
+    final subtitle = memoryName.isNotEmpty
+        ? '$memoryName 여정'
+        : (schedule?.title ?? '지난 여정');
+
+    final entries = <GuestbookEntry>[];
+    final archive = <MemoryArchiveEntry>[];
+
+    for (final book in _books.values) {
+      final place = placeById[book.placeId];
+      // GuestbookResponse에 장소 이름이 없어서 이번 여정 밖 장소는 이름을 못 채운다.
+      final name = place?.title ?? '지난 여정의 장소';
+
+      // 글이 있거나 사진이라도 올린 장소를 방명록 카드로 보여줌.
+      if (book.hasContent || book.hasCurrentPhoto) {
+        entries.add(GuestbookEntry.from(
+          book,
+          placeName: name,
+          authorName: _authorName,
+        ));
+      }
+
+      if (book.photos.isNotEmpty) {
+        archive.add(MemoryArchiveEntry.from(
+          book,
+          placeName: name,
+          subtitle: subtitle,
+          placeImageUrl:
+              (place != null && place.imageUrl.isNotEmpty) ? place.imageUrl : null,
+        ));
+      }
+    }
+
+    entries.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    archive.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    _entries = entries;
+    _archive = archive;
+  }
+
+  /// 한 장소만 서버에서 다시 읽어 목록에 반영.
+  Future<void> _refreshPlace(int placeId) async {
+    final updated = await GuestbookApiService.fetchGuestbook(placeId);
+    if (!mounted) return;
+    setState(() {
+      if (updated == null || updated.isEmpty) {
+        _books.remove(placeId);
+      } else {
+        _books[placeId] = updated;
+      }
+      _rebuildViewModels();
     });
   }
 
   // ---------------------------------------------------------------------------
-  // 작성
+  // 작성 / 수정
   // ---------------------------------------------------------------------------
 
-  /// 작성/수정 시트를 열고 결과를 받아 저장함.
+  /// 작성/수정 시트를 열고 결과를 서버에 반영함.
   Future<void> _openCompose({
     required _ComposeMode mode,
-    String? initialPlaceName,
-    GuestbookEntry? editEntry,
-    MemoryArchiveEntry? editArchive,
+    int? placeId,
   }) async {
+    if (_isSaving) return;
+
     final schedule = _schedule;
     if (schedule == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('먼저 스케줄을 만들면 그 여정 기준으로 기억을 남길 수 있어요')),
-      );
+      _toast('먼저 스케줄을 만들면 그 여정 기준으로 기억을 남길 수 있어요');
       return;
     }
 
-    final savedYear = editArchive?.beforeYear;
+    final options = _placeOptions(schedule);
+    if (options.isEmpty) {
+      // place_id가 없으면 방명록 API를 호출할 수 없음.
+      _toast('이 여정의 장소 정보를 아직 불러오지 못했어요');
+      return;
+    }
+
     final result = await showModalBottomSheet<_ComposeResult>(
       context: context,
       isScrollControlled: true,
@@ -126,136 +232,105 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
       builder: (_) => _ComposeSheet(
         mode: mode,
         scheduleTitle: schedule.title,
-        placeNames: _placeNames(schedule),
-        initialPlaceName:
-            initialPlaceName ?? editEntry?.placeName ?? editArchive?.placeName,
-        initialNote: editEntry?.content ?? editArchive?.note,
-        initialPhotoPath: editEntry?.photoPath ?? editArchive?.beforePhotoPath,
-        initialAfterPhotoPath: editArchive?.afterPhotoPath,
-        // '그때'는 연도 미입력 시의 기본 표기라 입력칸엔 채우지 않음.
-        initialYear: (savedYear == null || savedYear == '그때') ? null : savedYear,
-        isEditing: editEntry != null || editArchive != null,
+        placeOptions: options,
+        initialPlaceId: placeId ?? options.first.placeId,
+        existingByPlaceId: Map.of(_books),
       ),
     );
 
     if (result == null || !mounted) return;
-
-    if (mode == _ComposeMode.guestbook) {
-      await _saveGuestbook(schedule, result, editEntry);
-    } else {
-      await _saveArchive(schedule, result, editArchive);
-    }
+    await _applyCompose(result, mode);
   }
 
-  Future<void> _saveGuestbook(
-    ScheduleDetail schedule,
-    _ComposeResult result,
-    GuestbookEntry? editEntry,
-  ) async {
-    if (editEntry != null) {
-      final updated = editEntry.copyWith(
-        placeName: result.placeName,
-        content: result.note,
-        photoPath: result.photoPath,
-        clearPhoto: result.photoPath == null,
-      );
-      await GuestbookService.instance.updateEntry(updated);
-      // 바뀐 사진 파일 정리.
-      if (editEntry.photoPath != null && editEntry.photoPath != updated.photoPath) {
-        await PhotoService.instance.deleteSavedPhoto(editEntry.photoPath);
+  /// 시트 결과를 서버 호출 순서에 맞춰 반영한다.
+  ///
+  /// 순서가 중요함: 방명록 행 확보 → CURRENT 업로드 → PAST 업로드.
+  Future<void> _applyCompose(_ComposeResult result, _ComposeMode mode) async {
+    setState(() => _isSaving = true);
+
+    try {
+      final placeId = result.placeId;
+      final existing = _books[placeId];
+
+      // 사진만 올리는 경우에도 방명록 레코드가 먼저 있어야 안전해서 한 번 만들어 둠.
+      // photos 엔드포인트가 방명록을 자동 생성한다면 이 조건은 빼도 됨.
+      if (result.noteChanged || existing == null) {
+        await GuestbookApiService.saveContent(
+          placeId,
+          result.note.isEmpty ? null : result.note,
+        );
       }
+
+      if (result.currentPhotoPath != null) {
+        await GuestbookApiService.uploadPhoto(
+          placeId: placeId,
+          type: ArchivePhotoType.current,
+          filePath: result.currentPhotoPath!,
+        );
+        await PhotoService.instance.deleteSavedPhoto(result.currentPhotoPath);
+      }
+
+      if (result.pastPhotoPath != null) {
+        await GuestbookApiService.uploadPhoto(
+          placeId: placeId,
+          type: ArchivePhotoType.past,
+          filePath: result.pastPhotoPath!,
+          takenYear: result.takenYear,
+        );
+        await PhotoService.instance.deleteSavedPhoto(result.pastPhotoPath);
+      }
+
+      await _refreshPlace(placeId);
+
       if (!mounted) return;
       setState(() {
-        final i = _entries.indexWhere((e) => e.id == updated.id);
-        if (i >= 0) _entries[i] = updated;
-        _tabIndex = 0;
+        _tabIndex = mode == _ComposeMode.guestbook ? 0 : 1;
+        if (mode == _ComposeMode.archive) _featuredPlaceId = placeId;
       });
-      return;
+    } on GuestbookApiException catch (e) {
+      // 사진 두 장 중 한 장만 올라간 상태일 수 있어 현재 상태를 다시 읽어둔다.
+      await _silentRefresh(result.placeId);
+      if (!mounted) return;
+      _toast(e.userMessage);
+    } catch (_) {
+      await _silentRefresh(result.placeId);
+      if (!mounted) return;
+      _toast('저장하지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
-
-    final entry = GuestbookEntry(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
-      scheduleId: schedule.id,
-      placeName: result.placeName,
-      authorName: _authorName,
-      content: result.note,
-      createdAt: DateTime.now(),
-      photoPath: result.photoPath,
-    );
-    await GuestbookService.instance.addEntry(entry);
-    if (!mounted) return;
-    setState(() {
-      _entries.insert(0, entry);
-      _tabIndex = 0;
-    });
   }
 
-  Future<void> _saveArchive(
-    ScheduleDetail schedule,
-    _ComposeResult result,
-    MemoryArchiveEntry? editArchive,
-  ) async {
-    final matched = _findPlace(schedule, result.placeName);
-    final memoryName = schedule.memoryPlace?.name ?? '';
-    final placeImage =
-        (matched != null && matched.imageUrl.isNotEmpty) ? matched.imageUrl : null;
-
-    final entry = MemoryArchiveEntry(
-      id: editArchive?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
-      scheduleId: schedule.id,
-      placeName: result.placeName,
-      subtitle: memoryName.isNotEmpty ? '$memoryName 여정' : schedule.title,
-      beforeYear: result.beforeYear.isEmpty ? '그때' : result.beforeYear,
-      afterYear: '지금',
-      beforePhotoPath: result.photoPath,
-      afterPhotoPath: result.afterPhotoPath,
-      afterImageUrl: placeImage,
-      note: result.note.isEmpty ? null : result.note,
-      createdAt: editArchive?.createdAt ?? DateTime.now(),
-    );
-
-    if (editArchive != null) {
-      await GuestbookService.instance.updateArchive(entry);
-      // 교체된 사진 파일 정리
-      if (editArchive.beforePhotoPath != entry.beforePhotoPath) {
-        await PhotoService.instance.deleteSavedPhoto(editArchive.beforePhotoPath);
-      }
-      if (editArchive.afterPhotoPath != entry.afterPhotoPath) {
-        await PhotoService.instance.deleteSavedPhoto(editArchive.afterPhotoPath);
-      }
-    } else {
-      await GuestbookService.instance.addArchive(entry);
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _archive.removeWhere((a) => a.id == entry.id || a.placeName == entry.placeName);
-      _archive.insert(0, entry);
-      _tabIndex = 1;
-      _featuredPlaceName = entry.placeName;
-    });
+  /// 실패 복구용. 여기서 또 던지면 원래 에러 메시지를 덮어버려서 조용히 삼킴.
+  Future<void> _silentRefresh(int placeId) async {
+    try {
+      await _refreshPlace(placeId);
+    } catch (_) {}
   }
 
+  /// 글만 지움. 서버에 사진 삭제 엔드포인트가 없어 사진은 그대로 남는다.
   Future<void> _confirmDeleteEntry(GuestbookEntry entry) async {
-    final ok = await _confirm('이 방명록을 지울까요?');
-    if (!ok || !mounted) return;
-    await GuestbookService.instance.removeEntry(entry.id);
-    await PhotoService.instance.deleteSavedPhoto(entry.photoPath);
-    if (!mounted) return;
-    setState(() => _entries.removeWhere((e) => e.id == entry.id));
-  }
+    final book = _books[entry.placeId];
+    final hasPhotos = book?.photos.isNotEmpty ?? false;
 
-  Future<void> _confirmDeleteArchive(MemoryArchiveEntry entry) async {
-    final ok = await _confirm('이 장소의 그때 사진을 지울까요?');
+    final ok = await _confirm(
+      hasPhotos
+          ? '이 방명록 글을 지울까요?\n올린 사진은 아카이브에 그대로 남아요.'
+          : '이 방명록을 지울까요?',
+    );
     if (!ok || !mounted) return;
-    await GuestbookService.instance.removeArchive(entry.id);
-    await PhotoService.instance.deleteSavedPhoto(entry.beforePhotoPath);
-    await PhotoService.instance.deleteSavedPhoto(entry.afterPhotoPath);
-    if (!mounted) return;
-    setState(() {
-      _archive.removeWhere((a) => a.id == entry.id);
-      if (_featuredPlaceName == entry.placeName) _featuredPlaceName = null;
-    });
+
+    setState(() => _isSaving = true);
+    try {
+      await GuestbookApiService.saveContent(entry.placeId, null);
+      await _refreshPlace(entry.placeId);
+    } on GuestbookApiException catch (e) {
+      if (mounted) _toast(e.userMessage);
+    } catch (_) {
+      if (mounted) _toast('지우지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
   Future<bool> _confirm(String message) async {
@@ -285,33 +360,32 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
     return result ?? false;
   }
 
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   // ---------------------------------------------------------------------------
   // 데이터 헬퍼
   // ---------------------------------------------------------------------------
 
-  /// 여정에 담긴 장소 이름 목록(방문 순서, 중복 제거).
-  List<String> _placeNames(ScheduleDetail schedule) {
+  /// 방명록을 남길 수 있는 장소만(place_id가 있는 것) 방문 순서대로, 중복 제거.
+  List<_PlaceOption> _placeOptions(ScheduleDetail schedule) {
     final sorted = [...schedule.places]
-      ..sort((a, b) => a.visitOrder.compareTo(b.visitOrder));
-    final seen = <String>{};
-    final names = <String>[];
+      ..sort(ScheduleDetail.compareByDayAndOrder);
+
+    final seen = <int>{};
+    final options = <_PlaceOption>[];
     for (final p in sorted) {
-      if (p.title.isEmpty || !seen.add(p.title)) continue;
-      names.add(p.title);
+      if (!p.hasPlaceId || p.title.isEmpty || !seen.add(p.placeId)) continue;
+      options.add(_PlaceOption(placeId: p.placeId, name: p.title));
     }
-    return names;
+    return options;
   }
 
-  SchedulePlace? _findPlace(ScheduleDetail schedule, String title) {
-    for (final p in schedule.places) {
-      if (p.title == title) return p;
-    }
-    return null;
-  }
-
-  MemoryArchiveEntry? _archiveFor(String placeName) {
+  MemoryArchiveEntry? _archiveFor(int placeId) {
     for (final a in _archive) {
-      if (a.placeName == placeName) return a;
+      if (a.placeId == placeId) return a;
     }
     return null;
   }
@@ -319,26 +393,28 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
   /// 여정 장소를 방문 순서대로 늘어놓은 아카이브 슬롯 목록.
   List<_ArchiveSlot> _buildArchiveSlots(ScheduleDetail schedule) {
     final slots = <_ArchiveSlot>[];
-    final used = <String>{};
+    final used = <int>{};
 
     final sorted = [...schedule.places]
-      ..sort((a, b) => a.visitOrder.compareTo(b.visitOrder));
+      ..sort(ScheduleDetail.compareByDayAndOrder);
 
     for (final p in sorted) {
-      if (p.title.isEmpty || !used.add(p.title)) continue;
+      if (!p.hasPlaceId || p.title.isEmpty || !used.add(p.placeId)) continue;
       slots.add(_ArchiveSlot(
+        placeId: p.placeId,
         placeName: p.title,
-        afterImageUrl: p.imageUrl.isEmpty ? null : p.imageUrl,
-        entry: _archiveFor(p.title),
+        placeImageUrl: p.imageUrl.isEmpty ? null : p.imageUrl,
+        entry: _archiveFor(p.placeId),
       ));
     }
 
     // 여정에서 빠졌지만 사진을 올려둔 장소도 잃지 않게 뒤에 붙임.
     for (final a in _archive) {
-      if (used.add(a.placeName)) {
+      if (used.add(a.placeId)) {
         slots.add(_ArchiveSlot(
+          placeId: a.placeId,
           placeName: a.placeName,
-          afterImageUrl: a.afterImageUrl,
+          placeImageUrl: a.placeImageUrl,
           entry: a,
         ));
       }
@@ -357,21 +433,26 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: Column(
+      child: Stack(
         children: [
-          _GuestbookTopBar(
-            addLabel: _tabIndex == 0 ? '방명록 남기기' : '그때 사진 추가',
-            onAddTap: () => _openCompose(
-              mode: _tabIndex == 0 ? _ComposeMode.guestbook : _ComposeMode.archive,
-            ),
+          Column(
+            children: [
+              _GuestbookTopBar(
+                addLabel: _tabIndex == 0 ? '방명록 남기기' : '그때-지금 사진 추가',
+                onAddTap: () => _openCompose(
+                  mode: _tabIndex == 0 ? _ComposeMode.guestbook : _ComposeMode.archive,
+                ),
+              ),
+              _GuestbookTabs(
+                index: _tabIndex,
+                onChanged: (i) => setState(() => _tabIndex = i),
+              ),
+              const SizedBox(height: 10),
+              const Divider(height: 1, thickness: 1, color: AppColors.line),
+              Expanded(child: _buildBody()),
+            ],
           ),
-          _GuestbookTabs(
-            index: _tabIndex,
-            onChanged: (i) => setState(() => _tabIndex = i),
-          ),
-          const SizedBox(height: 10),
-          const Divider(height: 1, thickness: 1, color: AppColors.line),
-          Expanded(child: _buildBody()),
+          if (_isSaving) const _SavingOverlay(),
         ],
       ),
     );
@@ -384,7 +465,9 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
 
     final schedule = _schedule;
 
+    // 여정이 없어도 지난 방명록이 있으면 글 목록은 보여준다.
     if (schedule == null) {
+      if (_tabIndex == 0 && _entries.isNotEmpty) return _buildGuestbookList();
       return _EmptyStateCard(
         icon: _errorMessage == null ? Icons.map_outlined : Icons.cloud_off_outlined,
         title: _errorMessage == null ? '아직 만든 여정이 없어요' : '여정을 불러오지 못했어요',
@@ -397,6 +480,8 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
 
     return Column(
       children: [
+        if (_guestbookError != null)
+          _InlineNotice(message: _guestbookError!, onRetry: _load),
         Padding(
           padding: const EdgeInsets.only(top: 10, bottom: 4),
           child: _JourneyBadge(
@@ -417,13 +502,16 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
     if (_entries.isEmpty) {
       return _EmptyStateCard(
         icon: Icons.edit_note_outlined,
-        title: '이 여정에 남긴 기억이 아직 없어요',
+        title: '아직 남긴 기억이 없어요',
         subtitle: '${schedule.title}에 담긴 장소를 골라\n그날의 기억과 사진을 남겨보세요',
         actionLabel: '첫 기억 남기기',
         onAction: () => _openCompose(mode: _ComposeMode.guestbook),
       );
     }
+    return _buildGuestbookList();
+  }
 
+  Widget _buildGuestbookList() {
     return RefreshIndicator(
       color: AppColors.accent,
       onRefresh: _load,
@@ -440,7 +528,7 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
           entry: _entries[i],
           onEdit: () => _openCompose(
             mode: _ComposeMode.guestbook,
-            editEntry: _entries[i],
+            placeId: _entries[i].placeId,
           ),
           onDelete: () => _confirmDeleteEntry(_entries[i]),
         ),
@@ -461,162 +549,195 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
       );
     }
 
-    // 크게 볼 장소: 사용자가 고른 것 > 사진이 올라간 첫 장소 > 첫 장소
+    // 크게 볼 장소: 사용자가 고른 것 > 비교가 완성된 첫 장소 > 첫 장소
     _ArchiveSlot featured = slots.first;
-    if (_featuredPlaceName != null) {
+    if (_featuredPlaceId != null) {
       for (final s in slots) {
-        if (s.placeName == _featuredPlaceName) {
+        if (s.placeId == _featuredPlaceId) {
           featured = s;
           break;
         }
       }
     } else {
       for (final s in slots) {
-        if (s.entry != null) {
+        if (s.entry?.isComparable ?? false) {
           featured = s;
           break;
         }
       }
     }
 
-    final others = slots.where((s) => s.placeName != featured.placeName).toList();
+    final others = slots.where((s) => s.placeId != featured.placeId).toList();
     final featuredEntry = featured.entry;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.screenHorizontal,
-        14,
-        AppSpacing.screenHorizontal,
-        100,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            featuredEntry != null
-                ? '가운데 선을 좌우로 밀어 그때와 지금을 비교해보세요.'
-                : '그때 사진과 지금 사진을 함께 올리면 비교할 수 있어요.',
-            textAlign: TextAlign.center,
-            style: AppTextStyles.body,
-          ),
-          const SizedBox(height: 6),
-          Text(
-            featured.placeName,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppTextStyles.caption.copyWith(
-              color: AppColors.brandMuted,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 14),
-
-          if (featuredEntry != null) ...[
-            BeforeAfterSlider(
-              beforeImage: featuredEntry.beforeImage,
-              afterImage: featuredEntry.afterImage,
-              beforeLabel: featuredEntry.beforeYear,
-              afterLabel: featuredEntry.afterYear,
-            ),
-            if (featuredEntry.note != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                featuredEntry.note!,
-                textAlign: TextAlign.center,
-                style: AppTextStyles.body,
-              ),
-            ],
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _openCompose(
-                      mode: _ComposeMode.archive,
-                      editArchive: featuredEntry,
-                    ),
-                    icon: const Icon(Icons.edit_outlined, size: 16),
-                    label: const Text('수정하기'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                OutlinedButton(
-                  onPressed: () => _confirmDeleteArchive(featuredEntry),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.textSecondary,
-                  ),
-                  child: const Text('삭제'),
-                ),
-              ],
-            ),
-          ] else
-            _AddPhotoPrompt(
-              placeName: featured.placeName,
-              onTap: () => _openCompose(
-                mode: _ComposeMode.archive,
-                initialPlaceName: featured.placeName,
-              ),
-            ),
-
-          const SizedBox(height: AppSpacing.sectionGap),
-          const Text(
-            '다른 추억 둘러보기',
-            textAlign: TextAlign.center,
-            style: AppTextStyles.cardTitle,
-          ),
-          const SizedBox(height: 12),
-          if (others.isEmpty)
-            const Text(
-              '여정에 담긴 장소가 한 곳뿐이에요',
+    return RefreshIndicator(
+      color: AppColors.accent,
+      onRefresh: _load,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.screenHorizontal,
+          14,
+          AppSpacing.screenHorizontal,
+          100,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              _archiveHint(featuredEntry),
               textAlign: TextAlign.center,
-              style: AppTextStyles.bodySmall,
-            )
-          else
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: others.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: AppSpacing.cardGap,
-                mainAxisSpacing: AppSpacing.cardGap,
-                childAspectRatio: 0.92,
-              ),
-              itemBuilder: (context, i) {
-                final slot = others[i];
-                return _ArchiveGridCard(
-                  slot: slot,
-                  onTap: () {
-                    if (slot.entry != null) {
-                      setState(() => _featuredPlaceName = slot.placeName);
-                    } else {
-                      _openCompose(
-                        mode: _ComposeMode.archive,
-                        initialPlaceName: slot.placeName,
-                      );
-                    }
-                  },
-                );
-              },
+              style: AppTextStyles.body,
             ),
-        ],
+            const SizedBox(height: 6),
+            Text(
+              featured.placeName,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTextStyles.caption.copyWith(
+                color: AppColors.brandMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 14),
+            ..._buildFeatured(featured, featuredEntry),
+            const SizedBox(height: AppSpacing.sectionGap),
+            const Text(
+              '다른 추억 둘러보기',
+              textAlign: TextAlign.center,
+              style: AppTextStyles.cardTitle,
+            ),
+            const SizedBox(height: 12),
+            if (others.isEmpty)
+              const Text(
+                '여정에 담긴 장소가 한 곳뿐이에요',
+                textAlign: TextAlign.center,
+                style: AppTextStyles.bodySmall,
+              )
+            else
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: others.length,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  crossAxisSpacing: AppSpacing.cardGap,
+                  mainAxisSpacing: AppSpacing.cardGap,
+                  childAspectRatio: 0.92,
+                ),
+                itemBuilder: (context, i) {
+                  final slot = others[i];
+                  return _ArchiveGridCard(
+                    slot: slot,
+                    onTap: () {
+                      if (slot.entry != null) {
+                        setState(() => _featuredPlaceId = slot.placeId);
+                      } else {
+                        _openCompose(
+                          mode: _ComposeMode.archive,
+                          placeId: slot.placeId,
+                        );
+                      }
+                    },
+                  );
+                },
+              ),
+          ],
+        ),
       ),
     );
+  }
+
+  String _archiveHint(MemoryArchiveEntry? entry) {
+    if (entry == null) {
+      return '지금 모습을 찍고 예전 사진을 올리면\n좌우로 밀어 비교할 수 있어요.';
+    }
+    if (entry.needsPastPhoto) return '예전 사진을 더하면 지금과 비교할 수 있어요.';
+    if (!entry.isComparable) return '지금 모습을 먼저 찍어주세요.';
+    return '가운데 선을 좌우로 밀어 그때와 지금을 비교해보세요.';
+  }
+
+  List<Widget> _buildFeatured(_ArchiveSlot slot, MemoryArchiveEntry? entry) {
+    if (entry == null) {
+      return [
+        _AddPhotoPrompt(
+          placeName: slot.placeName,
+          onTap: () => _openCompose(
+            mode: _ComposeMode.archive,
+            placeId: slot.placeId,
+          ),
+        ),
+      ];
+    }
+
+    return [
+      if (entry.isComparable)
+        BeforeAfterSlider(
+          beforeImage: entry.beforeImage,
+          afterImage: entry.afterImage,
+          beforeLabel: entry.beforeYear,
+          afterLabel: entry.afterYear,
+        )
+      else
+        _SinglePhotoCard(
+          image: entry.afterImage ?? entry.beforeImage,
+          label: entry.hasAfterPhoto ? entry.afterYear : entry.beforeYear,
+        ),
+      if (entry.isProcessing) ...[
+        const SizedBox(height: 8),
+        const _InlineNotice(message: '사진을 정리하는 중이에요. 잠시 뒤 아래로 당겨 새로고침해보세요.'),
+      ],
+      if (entry.note != null) ...[
+        const SizedBox(height: 12),
+        Text(entry.note!, textAlign: TextAlign.center, style: AppTextStyles.body),
+      ],
+      const SizedBox(height: 12),
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: () => _openCompose(
+            mode: _ComposeMode.archive,
+            placeId: slot.placeId,
+          ),
+          icon: Icon(
+            entry.isComparable ? Icons.edit_outlined : Icons.add_a_photo_outlined,
+            size: 16,
+          ),
+          label: Text(entry.isComparable ? '메모 수정하기' : '남은 사진 올리기'),
+        ),
+      ),
+      const SizedBox(height: 8),
+      const Text(
+        '올린 사진은 아직 바꾸거나 지울 수 없어요',
+        textAlign: TextAlign.center,
+        style: AppTextStyles.bodySmall,
+      ),
+    ];
   }
 }
 
 /// 아카이브 한 칸. entry가 null이면 아직 사진이 없는 장소.
 class _ArchiveSlot {
+  final int placeId;
   final String placeName;
-  final String? afterImageUrl;
+  final String? placeImageUrl;
   final MemoryArchiveEntry? entry;
 
   const _ArchiveSlot({
+    required this.placeId,
     required this.placeName,
-    this.afterImageUrl,
+    this.placeImageUrl,
     this.entry,
   });
+}
+
+/// 장소 선택 칩 하나에 필요한 값.
+class _PlaceOption {
+  final int placeId;
+  final String name;
+
+  const _PlaceOption({required this.placeId, required this.name});
 }
 
 // =============================================================================
@@ -626,50 +747,54 @@ class _ArchiveSlot {
 enum _ComposeMode { guestbook, archive }
 
 class _ComposeResult {
+  final int placeId;
   final String placeName;
+
+  /// 방명록 텍스트. 아카이브 모드의 '메모'도 같은 필드로 저장됨.
   final String note;
 
-  /// 방명록이면 첨부 사진, 아카이브면 '그때' 사진.
-  final String? photoPath;
+  /// 텍스트가 실제로 바뀌었는지. 안 바뀌었으면 PUT을 건너뜀.
+  final bool noteChanged;
 
-  /// 아카이브의 '지금' 사진. 아카이브에서는 필수.
-  final String? afterPhotoPath;
+  /// 새로 업로드할 '지금' 사진(CURRENT). 이미 서버에 있으면 null.
+  final String? currentPhotoPath;
 
-  final String beforeYear;
+  /// 새로 업로드할 '그때' 사진(PAST). 이미 서버에 있으면 null.
+  final String? pastPhotoPath;
+
+  /// PAST 사진의 촬영 연도.
+  final int? takenYear;
 
   const _ComposeResult({
+    required this.placeId,
     required this.placeName,
     required this.note,
-    this.photoPath,
-    this.afterPhotoPath,
-    this.beforeYear = '',
+    required this.noteChanged,
+    this.currentPhotoPath,
+    this.pastPhotoPath,
+    this.takenYear,
   });
 }
 
-/// 방명록/아카이브 작성 시트. 컨트롤러를 자기 State에서 만들고 dispose까지 책임짐.
+/// 방명록/아카이브 작성 시트.
+///
+/// 서버가 CURRENT → PAST 순서를 요구해서 입력 순서도 '지금 → 그때'로 둔다.
+/// 이미 올라간 사진은 교체 API가 없어 잠금 상태로만 보여준다.
 class _ComposeSheet extends StatefulWidget {
   final _ComposeMode mode;
   final String scheduleTitle;
-  final List<String> placeNames;
-  final String? initialPlaceName;
+  final List<_PlaceOption> placeOptions;
+  final int initialPlaceId;
 
-  // '수정'으로 열었을 때 채워넣을 기존 값들.
-  final String? initialNote;
-  final String? initialPhotoPath;
-  final String? initialAfterPhotoPath;
-  final String? initialYear;
-  final bool isEditing;
+  /// 장소별 현재 서버 상태. 장소를 바꾸면 이 맵에서 다시 읽는다.
+  final Map<int, Guestbook> existingByPlaceId;
 
   const _ComposeSheet({
     required this.mode,
     required this.scheduleTitle,
-    required this.placeNames,
-    this.initialPlaceName,
-    this.initialNote,
-    this.initialPhotoPath,
-    this.initialAfterPhotoPath,
-    this.initialYear,
-    this.isEditing = false,
+    required this.placeOptions,
+    required this.initialPlaceId,
+    required this.existingByPlaceId,
   });
 
   @override
@@ -678,129 +803,176 @@ class _ComposeSheet extends StatefulWidget {
 
 class _ComposeSheetState extends State<_ComposeSheet> {
   final TextEditingController _noteCtrl = TextEditingController();
-  final TextEditingController _customPlaceCtrl = TextEditingController();
   final TextEditingController _yearCtrl = TextEditingController();
 
-  String? _selectedPlace;
-  bool _useCustomPlace = false;
+  late int _placeId;
 
-  /// 방명록 첨부 사진 / 아카이브의 '그때' 사진
-  String? _photoPath;
+  /// 시트를 열었을 때의 서버 텍스트. 변경 여부 판단에 씀.
+  String _originalNote = '';
 
-  /// 아카이브의 '지금' 사진
-  String? _afterPhotoPath;
+  /// 새로 올릴 '지금' 사진 (CURRENT)
+  String? _currentPhotoPath;
+
+  /// 새로 올릴 '그때' 사진 (PAST)
+  String? _pastPhotoPath;
 
   /// 어느 칸의 사진을 고르는 중인지.
-  _PhotoSlot? _pickingSlot;
+  ArchivePhotoType? _pickingSlot;
 
   bool get _isArchive => widget.mode == _ComposeMode.archive;
   bool get _isPicking => _pickingSlot != null;
 
+  Guestbook? get _existing => widget.existingByPlaceId[_placeId];
+
+  bool get _hasServerCurrent => _existing?.hasCurrentPhoto ?? false;
+  bool get _hasServerPast => _existing?.hasPastPhoto ?? false;
+
+  /// 서버에 있든 방금 골랐든, 사진이 확보된 상태.
+  bool get _hasCurrent => _hasServerCurrent || _currentPhotoPath != null;
+  bool get _hasPast => _hasServerPast || _pastPhotoPath != null;
+
   @override
   void initState() {
     super.initState();
-    final initial = widget.initialPlaceName;
-    if (initial != null && widget.placeNames.contains(initial)) {
-      _selectedPlace = initial;
-    } else if (widget.placeNames.isNotEmpty) {
-      _selectedPlace = widget.placeNames.first;
-    } else {
-      // 여정에 장소가 없으면 직접 입력만 가능.
-      _useCustomPlace = true;
-      if (initial != null) _customPlaceCtrl.text = initial;
-    }
+    _placeId = widget.initialPlaceId;
+    _applyPlace(_placeId);
+  }
 
-    _noteCtrl.text = widget.initialNote ?? '';
-    _yearCtrl.text = widget.initialYear ?? '';
-    _photoPath = widget.initialPhotoPath;
-    _afterPhotoPath = widget.initialAfterPhotoPath;
+  /// 장소가 바뀌면 그 장소의 서버 상태로 입력값을 다시 맞춘다.
+  void _applyPlace(int placeId) {
+    final book = widget.existingByPlaceId[placeId];
+    _placeId = placeId;
+    _originalNote = book?.content?.trim() ?? '';
+    _noteCtrl.text = _originalNote;
+    _currentPhotoPath = null;
+    _pastPhotoPath = null;
+    _yearCtrl.text = book?.pastPhoto?.takenYear?.toString() ?? '';
   }
 
   @override
   void dispose() {
     _noteCtrl.dispose();
-    _customPlaceCtrl.dispose();
     _yearCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _pickPhoto(_PhotoSlot slot) async {
+  String get _placeName {
+    for (final o in widget.placeOptions) {
+      if (o.placeId == _placeId) return o.name;
+    }
+    return '';
+  }
+
+  Future<void> _pickPhoto(ArchivePhotoType type) async {
     if (_isPicking) return;
 
-    // '지금 사진'은 앨범에서 고를 수 없고 그 자리에서 찍은 것만 받음.
-    final isNowPhoto = slot == _PhotoSlot.after;
+    final isNow = type == ArchivePhotoType.current;
 
-    // 그때 사진이 먼저 올라와 있어야 지금 사진을 찍을 수 있음.
-    if (isNowPhoto && _photoPath == null) {
-      _toast('그때 사진을 먼저 올려주세요');
+    if (isNow ? _hasServerCurrent : _hasServerPast) {
+      _toast('이미 올린 사진이에요. 교체는 아직 지원되지 않아요');
       return;
     }
-    if (!isNowPhoto) {
-      final source = await showPhotoSourceSheet(context);
+    // 서버가 CURRENT 선행을 요구함.
+    if (!isNow && !_hasCurrent) {
+      _toast('지금 모습을 먼저 찍어주세요');
+      return;
+    }
+
+    // '지금 사진'은 그 자리에서 찍은 것만 받음.
+    ImageSource? source;
+    if (!isNow) {
+      source = await showPhotoSourceSheet(context);
       if (source == null || !mounted) return;
-      setState(() => _pickingSlot = slot);
-      String? picked;
-      try {
-        picked = await PhotoService.instance.pickAndSaveMemoryPhoto(source: source);
-      } catch (_) {
-        picked = null;
-      }
-      if (!mounted) return;
-      setState(() {
-        _pickingSlot = null;
-        if (picked != null) _photoPath = picked;
-      });
-      if (picked == null) _toast('사진을 불러오지 못했어요');
-      return;
     }
 
-    setState(() => _pickingSlot = slot);
-    String? path;
+    setState(() => _pickingSlot = type);
+    String? picked;
     try {
-      path = await PhotoService.instance.captureMemoryPhoto();
+      picked = isNow
+          ? await PhotoService.instance.captureMemoryPhoto()
+          : await PhotoService.instance.pickAndSaveMemoryPhoto(source: source!);
     } catch (_) {
-      path = null;
+      picked = null;
     }
+
     if (!mounted) return;
     setState(() {
       _pickingSlot = null;
-      if (path != null) _afterPhotoPath = path;
+      if (picked == null) return;
+      if (isNow) {
+        _currentPhotoPath = picked;
+      } else {
+        _pastPhotoPath = picked;
+      }
     });
-    if (path == null) {
-      _toast('카메라로 지금 모습을 찍어주세요');
+
+    if (picked == null) {
+      _toast(isNow ? '카메라로 지금 모습을 찍어주세요' : '사진을 불러오지 못했어요');
     }
   }
 
-  String get _placeName =>
-      _useCustomPlace ? _customPlaceCtrl.text.trim() : (_selectedPlace ?? '');
+  /// 로컬에만 있는 사진을 뺌. 서버에 올라간 사진은 대상이 아님.
+  void _clearLocalPhoto(ArchivePhotoType type) {
+    setState(() {
+      if (type == ArchivePhotoType.current) {
+        _currentPhotoPath = null;
+        // 지금 사진이 빠지면 그때 사진도 올릴 수 없어 같이 비움.
+        if (!_hasServerCurrent) _pastPhotoPath = null;
+      } else {
+        _pastPhotoPath = null;
+      }
+    });
+  }
 
   void _submit() {
-    final place = _placeName;
     final note = _noteCtrl.text.trim();
 
-    if (place.isEmpty) {
-      _toast('장소를 선택하거나 입력해주세요');
+    if (_placeId <= 0) {
+      _toast('장소를 선택해주세요');
       return;
     }
-    // 짝이 맞아야 비교가 성립하므로 두 장 모두 필수.
-    if (_isArchive && (_photoPath == null || _afterPhotoPath == null)) {
-      _toast(_photoPath == null
-          ? '그때 사진을 올려주세요'
-          : '지금 모습을 카메라로 찍어주세요');
-      return;
-    }
-    if (!_isArchive && note.isEmpty && _photoPath == null) {
+
+    if (_isArchive) {
+      if (!_hasCurrent) {
+        _toast('지금 모습을 카메라로 찍어주세요');
+        return;
+      }
+      if (!_hasPast) {
+        _toast('그때 사진을 올려주세요');
+        return;
+      }
+    } else if (note.isEmpty && _currentPhotoPath == null && !_hasServerCurrent) {
       _toast('남길 기억이나 사진을 하나는 넣어주세요');
       return;
     }
 
+    if (note.length > GuestbookApiService.maxContentLength) {
+      _toast('방명록은 ${GuestbookApiService.maxContentLength}자까지 쓸 수 있어요');
+      return;
+    }
+
+    int? takenYear;
+    if (_pastPhotoPath != null) {
+      final raw = _yearCtrl.text.trim();
+      if (raw.isNotEmpty) {
+        final parsed = int.tryParse(raw);
+        if (parsed == null || parsed < 1900 || parsed > DateTime.now().year) {
+          _toast('연도는 1900부터 ${DateTime.now().year} 사이로 적어주세요');
+          return;
+        }
+        takenYear = parsed;
+      }
+    }
+
     Navigator.of(context).pop(
       _ComposeResult(
-        placeName: place,
+        placeId: _placeId,
+        placeName: _placeName,
         note: note,
-        photoPath: _photoPath,
-        afterPhotoPath: _afterPhotoPath,
-        beforeYear: _yearCtrl.text.trim(),
+        noteChanged: note != _originalNote,
+        currentPhotoPath: _currentPhotoPath,
+        pastPhotoPath: _pastPhotoPath,
+        takenYear: takenYear,
       ),
     );
   }
@@ -812,6 +984,7 @@ class _ComposeSheetState extends State<_ComposeSheet> {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final existing = _existing;
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
@@ -846,9 +1019,7 @@ class _ComposeSheetState extends State<_ComposeSheet> {
                 ),
               ),
               Text(
-                _isArchive
-                    ? (widget.isEditing ? '그때-지금 사진 수정' : '그때-지금 사진 추가하기')
-                    : (widget.isEditing ? '방명록 수정' : '새 방명록 남기기'),
+                _isArchive ? '그때-지금 사진 남기기' : '방명록 남기기',
                 style: AppTextStyles.screenTitle,
               ),
               const SizedBox(height: 6),
@@ -867,88 +1038,77 @@ class _ComposeSheetState extends State<_ComposeSheet> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  for (final name in widget.placeNames)
+                  for (final option in widget.placeOptions)
                     _SelectChip(
-                      label: name,
-                      selected: !_useCustomPlace && _selectedPlace == name,
-                      onTap: () => setState(() {
-                        _useCustomPlace = false;
-                        _selectedPlace = name;
-                      }),
+                      label: option.name,
+                      selected: _placeId == option.placeId,
+                      onTap: () => setState(() => _applyPlace(option.placeId)),
                     ),
-                  _SelectChip(
-                    label: '직접 입력',
-                    icon: Icons.edit_outlined,
-                    selected: _useCustomPlace,
-                    onTap: () => setState(() => _useCustomPlace = true),
-                  ),
                 ],
               ),
-              if (_useCustomPlace) ...[
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _customPlaceCtrl,
-                  style: AppTextStyles.input,
-                  decoration: const InputDecoration(
-                    hintText: '장소 이름을 입력해주세요',
-                    hintStyle: AppTextStyles.inputHint,
-                  ),
-                ),
-              ],
               const SizedBox(height: 18),
 
-              _FieldLabel(_isArchive ? '그때 사진 (필수)' : '사진 (선택)'),
+              // 서버가 CURRENT 선행을 요구해서 '지금 사진'이 먼저 온다.
+              _FieldLabel(
+                _isArchive ? '지금 사진 (필수 · 카메라 촬영)' : '지금 사진 (선택 · 카메라 촬영)',
+              ),
               const SizedBox(height: 8),
               _PhotoPickerBox(
-                photoPath: _photoPath,
-                isLoading: _pickingSlot == _PhotoSlot.before,
-                emptyLabel: _isArchive
-                    ? '예전에 찍은 사진 가져오기'
-                    : '카메라 또는 앨범에서 사진 가져오기',
-                onTap: () => _pickPhoto(_PhotoSlot.before),
-                // 그때 사진을 빼면 지금 사진도 같이 비워 순서를 유지함.
-                onClear: () => setState(() {
-                  _photoPath = null;
-                  _afterPhotoPath = null;
-                }),
+                photoPath: _currentPhotoPath,
+                uploadedUrl: existing?.currentPhoto?.displayUrl,
+                isLoading: _pickingSlot == ArchivePhotoType.current,
+                emptyLabel: '지금 모습을 카메라로 찍기',
+                changeLabel: '다시 찍기',
+                changeIcon: Icons.photo_camera_outlined,
+                onTap: () => _pickPhoto(ArchivePhotoType.current),
+                onClear: () => _clearLocalPhoto(ArchivePhotoType.current),
               ),
 
               if (_isArchive) ...[
                 const SizedBox(height: 18),
-                const _FieldLabel('지금 사진 (필수 · 카메라 촬영)'),
+                const _FieldLabel('그때 사진 (필수)'),
                 const SizedBox(height: 8),
                 _PhotoPickerBox(
-                  photoPath: _afterPhotoPath,
-                  isLoading: _pickingSlot == _PhotoSlot.after,
-                  enabled: _photoPath != null,
-                  emptyLabel: '지금 모습을 카메라로 찍기',
-                  lockedLabel: '그때 사진을 먼저 올려주세요',
-                  changeLabel: '다시 찍기',
-                  changeIcon: Icons.photo_camera_outlined,
-                  onTap: () => _pickPhoto(_PhotoSlot.after),
-                  onClear: () => setState(() => _afterPhotoPath = null),
+                  photoPath: _pastPhotoPath,
+                  uploadedUrl: existing?.pastPhoto?.displayUrl,
+                  isLoading: _pickingSlot == ArchivePhotoType.past,
+                  enabled: _hasCurrent,
+                  emptyLabel: '예전에 찍은 사진 가져오기',
+                  lockedLabel: '지금 사진을 먼저 올려주세요',
+                  onTap: () => _pickPhoto(ArchivePhotoType.past),
+                  onClear: () => _clearLocalPhoto(ArchivePhotoType.past),
                 ),
-                const SizedBox(height: 18),
-                const _FieldLabel('그때는 언제인가요 (선택)'),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _yearCtrl,
-                  keyboardType: TextInputType.number,
-                  style: AppTextStyles.input,
-                  decoration: const InputDecoration(
-                    hintText: '예: 1998',
-                    hintStyle: AppTextStyles.inputHint,
+                if (_pastPhotoPath != null) ...[
+                  const SizedBox(height: 18),
+                  const _FieldLabel('그때는 언제인가요 (선택)'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _yearCtrl,
+                    keyboardType: TextInputType.number,
+                    style: AppTextStyles.input,
+                    decoration: const InputDecoration(
+                      hintText: '예: 1998',
+                      hintStyle: AppTextStyles.inputHint,
+                    ),
                   ),
-                ),
+                ],
               ],
 
               const SizedBox(height: 18),
               _FieldLabel(_isArchive ? '메모 (선택)' : '기억'),
+              if (_isArchive) ...[
+                const SizedBox(height: 4),
+                const Text(
+                  '방명록 탭의 글과 같은 내용이에요',
+                  style: AppTextStyles.bodySmall,
+                ),
+              ],
               const SizedBox(height: 8),
               TextField(
                 controller: _noteCtrl,
                 style: AppTextStyles.input,
                 maxLines: 4,
+                maxLength: GuestbookApiService.maxContentLength,
                 decoration: InputDecoration(
                   hintText: _isArchive
                       ? '이 사진에 얽힌 이야기를 적어보세요'
@@ -956,7 +1116,7 @@ class _ComposeSheetState extends State<_ComposeSheet> {
                   hintStyle: AppTextStyles.inputHint,
                 ),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 10),
 
               SizedBox(
                 width: double.infinity,
@@ -971,7 +1131,7 @@ class _ComposeSheetState extends State<_ComposeSheet> {
                     elevation: 0,
                   ),
                   child: Text(
-                    widget.isEditing ? '수정 완료' : '등록하기',
+                    existing == null ? '등록하기' : '저장하기',
                     style: AppTextStyles.button,
                   ),
                 ),
@@ -1052,11 +1212,12 @@ class _SelectChip extends StatelessWidget {
   }
 }
 
-/// 사진을 고르는 영역. 고른 뒤에는 미리보기 + 변경/빼기.
-enum _PhotoSlot { before, after }
-
+/// 사진을 고르는 영역.
+///
+/// [uploadedUrl]이 있으면 이미 서버에 올라간 사진이라 바꾸거나 뺄 수 없다.
 class _PhotoPickerBox extends StatelessWidget {
   final String? photoPath;
+  final String? uploadedUrl;
   final bool isLoading;
   final String emptyLabel;
   final String changeLabel;
@@ -1074,6 +1235,7 @@ class _PhotoPickerBox extends StatelessWidget {
     required this.emptyLabel,
     required this.onTap,
     required this.onClear,
+    this.uploadedUrl,
     this.changeLabel = '다른 사진',
     this.changeIcon = Icons.autorenew,
     this.enabled = true,
@@ -1092,6 +1254,37 @@ class _PhotoPickerBox extends StatelessWidget {
           border: Border.all(color: AppColors.line),
         ),
         child: const CircularProgressIndicator(color: AppColors.accent),
+      );
+    }
+
+    // 이미 서버에 올라간 사진 — 보기만 가능.
+    final uploaded = uploadedUrl;
+    if (uploaded != null && uploaded.isNotEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            child: Image.network(
+              uploaded,
+              width: double.infinity,
+              height: 180,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _photoFallback('사진을 열 수 없어요'),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(Icons.lock_outline, size: 14, color: AppColors.textSecondary),
+              const SizedBox(width: 5),
+              Text(
+                '이미 올린 사진이에요',
+                style: AppTextStyles.caption.copyWith(color: AppColors.textSecondary),
+              ),
+            ],
+          ),
+        ],
       );
     }
 
@@ -1147,12 +1340,7 @@ class _PhotoPickerBox extends StatelessWidget {
             width: double.infinity,
             height: 180,
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => Container(
-              height: 180,
-              alignment: Alignment.center,
-              color: AppColors.background,
-              child: const Text('사진을 열 수 없어요', style: AppTextStyles.bodySmall),
-            ),
+            errorBuilder: (_, __, ___) => _photoFallback('사진을 열 수 없어요'),
           ),
         ),
         const SizedBox(height: 8),
@@ -1175,11 +1363,127 @@ class _PhotoPickerBox extends StatelessWidget {
       ],
     );
   }
+
+  Widget _photoFallback(String message) => Container(
+        height: 180,
+        alignment: Alignment.center,
+        color: AppColors.background,
+        child: Text(message, style: AppTextStyles.bodySmall),
+      );
 }
 
 // =============================================================================
 // 화면 조각들
 // =============================================================================
+
+/// 저장/업로드 중 입력을 막는 오버레이.
+class _SavingOverlay extends StatelessWidget {
+  const _SavingOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: AbsorbPointer(
+        child: ColoredBox(
+          color: AppColors.background.withValues(alpha: 0.72),
+          child: const Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(color: AppColors.accent),
+                SizedBox(height: 12),
+                Text('저장하는 중이에요', style: AppTextStyles.bodySmall),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 목록 위에 얇게 깔리는 안내 줄. 부분 실패를 알리되 화면은 막지 않음.
+class _InlineNotice extends StatelessWidget {
+  final String message;
+  final VoidCallback? onRetry;
+
+  const _InlineNotice({required this.message, this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(
+        AppSpacing.screenHorizontal,
+        10,
+        AppSpacing.screenHorizontal,
+        0,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, size: 15, color: AppColors.textSecondary),
+          const SizedBox(width: 8),
+          Expanded(child: Text(message, style: AppTextStyles.bodySmall)),
+          if (onRetry != null)
+            TextButton(
+              onPressed: onRetry,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text(
+                '다시 시도',
+                style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 사진이 한 장만 있을 때 쓰는 단독 표시.
+class _SinglePhotoCard extends StatelessWidget {
+  final ImageProvider? image;
+  final String label;
+
+  const _SinglePhotoCard({required this.image, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        MemoryPhotoHero(
+          image: image,
+          height: 260,
+          borderRadius: BorderRadius.circular(AppRadius.cardHero),
+        ),
+        Positioned(
+          left: 12,
+          top: 12,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: AppColors.cardBackground.withValues(alpha: 0.9),
+              borderRadius: BorderRadius.circular(AppRadius.pill),
+            ),
+            child: Text(
+              label,
+              style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 /// 화면 상단 - 타이틀 + 새 글 작성 버튼.
 class _GuestbookTopBar extends StatelessWidget {
@@ -1288,7 +1592,8 @@ class _JourneyBadge extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.route_outlined, size: AppIconSize.inCardSmall, color: AppColors.text),
+            const Icon(Icons.route_outlined,
+                size: AppIconSize.inCardSmall, color: AppColors.text),
             const SizedBox(width: 5),
             Flexible(
               child: Text(
@@ -1471,7 +1776,7 @@ class _EntryMenuButton extends StatelessWidget {
               Icon(Icons.delete_outline, size: 16, color: AppColors.accent),
               SizedBox(width: 8),
               Text(
-                '삭제하기',
+                '글 지우기',
                 style: TextStyle(
                   fontSize: 14,
                   color: AppColors.accent,
@@ -1529,7 +1834,8 @@ class _PlaceTag extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.place_outlined, size: AppIconSize.inCardSmall, color: AppColors.accent),
+          const Icon(Icons.place_outlined,
+              size: AppIconSize.inCardSmall, color: AppColors.accent),
           const SizedBox(width: 4),
           Flexible(
             child: Text(
@@ -1579,7 +1885,7 @@ class _AddPhotoPrompt extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             const Text(
-              '예전 사진과 지금 모습 사진을 함께 올리면\n좌우로 밀어 비교할 수 있어요',
+              '지금 모습을 카메라로 찍고 예전 사진을 올리면\n좌우로 밀어 비교할 수 있어요',
               style: AppTextStyles.bodySmall,
               textAlign: TextAlign.center,
             ),
@@ -1598,9 +1904,11 @@ class _ArchiveGridCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasPhoto = slot.entry?.hasBeforePhoto ?? false;
-    final url = slot.afterImageUrl;
-    final ImageProvider? cover = slot.entry?.beforeImage ??
+    final entry = slot.entry;
+    final hasPhoto = entry?.hasBeforePhoto ?? false;
+    final url = slot.placeImageUrl;
+    final ImageProvider? cover = entry?.beforeImage ??
+        entry?.afterImage ??
         ((url != null && url.isNotEmpty) ? NetworkImage(url) : null);
 
     return GestureDetector(
