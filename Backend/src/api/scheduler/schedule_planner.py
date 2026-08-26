@@ -110,6 +110,7 @@ def plan_schedule(
     accommodation_policy: AccommodationPolicy = DEFAULT_ACCOMMODATION_POLICY,
     accommodation_stays: Mapping[str, AccommodationStayWindow] | None = None,
     validate_stay_coverage: bool = True,
+    meal_restaurant_ids: frozenset[str] | None = None,
 ) -> tuple[PlannedStop, ...]:
     """Schedule travel then visits sequentially within the exact user window."""
 
@@ -195,11 +196,19 @@ def plan_schedule(
             role = ScheduleRole.ACCOMMODATION
             assigned_time_slot = _time_slot(scheduled_start)
         elif selection.category == PlaceCategory.RESTAURANT:
-            meal_placement = _place_in_meal_window(
-                arrival,
-                meal_windows,
-                start_index=next_meal_window_index,
-                meal_minutes=meal_policy.meal_minutes,
+            is_meal_restaurant = (
+                meal_restaurant_ids is None
+                or selection.content_id in meal_restaurant_ids
+            )
+            meal_placement = (
+                _place_in_meal_window(
+                    arrival,
+                    meal_windows,
+                    start_index=next_meal_window_index,
+                    meal_minutes=meal_policy.meal_minutes,
+                )
+                if is_meal_restaurant
+                else None
             )
             if meal_placement is not None:
                 (
@@ -370,7 +379,7 @@ def reorder_accommodations_for_check_in(
 
     for stay_index, accommodation in enumerate(accommodations):
         best_candidate: tuple[SchedulerPlaceSelection, ...] | None = None
-        best_score: tuple[float, float, int] | None = None
+        best_score: tuple[float, float, float, float, int] | None = None
         check_in_date = (
             accommodation_stays[accommodation.content_id].check_in_date
             if accommodation_stays is not None
@@ -390,16 +399,17 @@ def reorder_accommodations_for_check_in(
         for index in range(minimum_index, len(current) + 1):
             candidate = current[:index] + (accommodation,) + current[index:]
             legs = _estimated_legs(origin, candidate, mobility_mode)
+            prefix = candidate[: index + 1]
             try:
                 planned = plan_schedule(
-                    candidate,
-                    legs,
+                    prefix,
+                    legs[: index + 1],
                     start_datetime=start_datetime,
                     end_datetime=end_datetime,
                     accommodation_stays=(
                         {
                             place.content_id: accommodation_stays[place.content_id]
-                            for place in candidate
+                            for place in prefix
                             if place.category == PlaceCategory.ACCOMMODATION
                         }
                         if accommodation_stays is not None
@@ -417,14 +427,27 @@ def reorder_accommodations_for_check_in(
             check_in = stay.check_in_datetime
             if check_in is None:
                 continue
+            arrival_at_stay = (
+                start_datetime + timedelta(seconds=legs[0].duration_seconds)
+                if len(planned) == 1
+                else planned[-2].scheduled_end_datetime
+                + timedelta(seconds=legs[index].duration_seconds)
+            )
             violation_seconds = (
                 0.0
                 if check_in <= preferred_end
                 else (check_in - preferred_end).total_seconds()
             )
+            idle_seconds = max(0.0, (check_in - arrival_at_stay).total_seconds())
             target_distance_seconds = abs((check_in - preferred_start).total_seconds())
             route_distance = float(sum(leg.distance_m for leg in legs))
-            score = (violation_seconds, target_distance_seconds + route_distance, index)
+            score = (
+                violation_seconds,
+                idle_seconds,
+                target_distance_seconds,
+                route_distance,
+                index,
+            )
             if best_score is None or score < best_score:
                 best_score = score
                 best_candidate = candidate
@@ -456,7 +479,7 @@ def reorder_restaurants_for_meal_windows(
     daily_policy: DailySchedulePolicy = DEFAULT_DAILY_POLICY,
     meal_policy: MealWindowPolicy = DEFAULT_MEAL_POLICY,
     accommodation_stays: Mapping[str, AccommodationStayWindow] | None = None,
-) -> tuple[SchedulerPlaceSelection, ...]:
+) -> tuple[tuple[SchedulerPlaceSelection, ...], frozenset[str]]:
     """Fill gaps with flexible stops and place restaurants at meal boundaries."""
 
     places = tuple(ordered_places)
@@ -464,11 +487,17 @@ def reorder_restaurants_for_meal_windows(
         place for place in places if place.category == PlaceCategory.RESTAURANT
     ]
     if not restaurants:
-        return places
+        return places, frozenset()
 
     accommodation_count = sum(
         place.category == PlaceCategory.ACCOMMODATION for place in places
     )
+    accommodation_indexes = {
+        place.content_id: index
+        for index, place in enumerate(
+            place for place in places if place.category == PlaceCategory.ACCOMMODATION
+        )
+    }
     if accommodation_stays is not None:
         accommodation_ids = tuple(
             place.content_id
@@ -528,7 +557,67 @@ def reorder_restaurants_for_meal_windows(
 
         _, meal_end, _, assigned_window_index = placement
         while flexible_places:
+            candidate_index = 0
             candidate = flexible_places[0]
+            if candidate.category == PlaceCategory.ACCOMMODATION:
+                accommodation_point = _selection_point(candidate)
+                accommodation_arrival = cursor + _estimated_travel_duration(
+                    current_point,
+                    accommodation_point,
+                    mobility_mode,
+                )
+                try:
+                    accommodation_start, _, _ = _place_accommodation(
+                        accommodation_arrival,
+                        start_datetime=start_datetime,
+                        end_datetime=end_datetime,
+                        daily_policy=daily_policy,
+                        accommodation_policy=DEFAULT_ACCOMMODATION_POLICY,
+                        stay_index=accommodation_indexes[candidate.content_id],
+                        accommodation_count=accommodation_count,
+                        stay_window=(
+                            accommodation_stays[candidate.content_id]
+                            if accommodation_stays is not None
+                            else None
+                        ),
+                    )
+                except ScheduleWindowError:
+                    break
+                for index, alternative in enumerate(flexible_places[1:], start=1):
+                    if alternative.category == PlaceCategory.ACCOMMODATION:
+                        continue
+                    alternative_point = _selection_point(alternative)
+                    alternative_arrival = cursor + _estimated_travel_duration(
+                        current_point,
+                        alternative_point,
+                        mobility_mode,
+                    )
+                    try:
+                        _, alternative_end = _place_flexible_visit(
+                            alternative_arrival,
+                            duration_minutes=_flexible_duration_minutes(
+                                alternative,
+                                meal_policy=meal_policy,
+                            ),
+                            start_datetime=start_datetime,
+                            end_datetime=end_datetime,
+                            daily_policy=daily_policy,
+                            not_before_by_date=not_before_by_date,
+                        )
+                    except ScheduleWindowError:
+                        continue
+                    arrival_after_alternative = (
+                        alternative_end
+                        + _estimated_travel_duration(
+                            alternative_point,
+                            accommodation_point,
+                            mobility_mode,
+                        )
+                    )
+                    if arrival_after_alternative <= accommodation_start:
+                        candidate_index = index
+                        candidate = alternative
+                        break
             candidate_point = _selection_point(candidate)
             candidate_arrival = cursor + _estimated_travel_duration(
                 current_point,
@@ -536,17 +625,33 @@ def reorder_restaurants_for_meal_windows(
                 mobility_mode,
             )
             try:
-                candidate_start, candidate_end = _place_flexible_visit(
-                    candidate_arrival,
-                    duration_minutes=_flexible_duration_minutes(
-                        candidate,
-                        meal_policy=meal_policy,
-                    ),
-                    start_datetime=start_datetime,
-                    end_datetime=end_datetime,
-                    daily_policy=daily_policy,
-                    not_before_by_date=not_before_by_date,
-                )
+                if candidate.category == PlaceCategory.ACCOMMODATION:
+                    candidate_start, candidate_end, _ = _place_accommodation(
+                        candidate_arrival,
+                        start_datetime=start_datetime,
+                        end_datetime=end_datetime,
+                        daily_policy=daily_policy,
+                        accommodation_policy=DEFAULT_ACCOMMODATION_POLICY,
+                        stay_index=accommodation_indexes[candidate.content_id],
+                        accommodation_count=accommodation_count,
+                        stay_window=(
+                            accommodation_stays[candidate.content_id]
+                            if accommodation_stays is not None
+                            else None
+                        ),
+                    )
+                else:
+                    candidate_start, candidate_end = _place_flexible_visit(
+                        candidate_arrival,
+                        duration_minutes=_flexible_duration_minutes(
+                            candidate,
+                            meal_policy=meal_policy,
+                        ),
+                        start_datetime=start_datetime,
+                        end_datetime=end_datetime,
+                        daily_policy=daily_policy,
+                        not_before_by_date=not_before_by_date,
+                    )
             except ScheduleWindowError:
                 break
             del candidate_start
@@ -565,7 +670,7 @@ def reorder_restaurants_for_meal_windows(
             if candidate_meal_end > meal_windows[assigned_window_index - 1].end:
                 break
 
-            result.append(flexible_places.pop(0))
+            result.append(flexible_places.pop(candidate_index))
             cursor = candidate_end
             current_point = candidate_point
             meal_end = candidate_meal_end
@@ -576,7 +681,7 @@ def reorder_restaurants_for_meal_windows(
         next_window_index = assigned_window_index
 
     result.extend(flexible_places)
-    return tuple(result)
+    return tuple(result), frozenset(meal_ids)
 
 
 def _selection_point(selection: SchedulerPlaceSelection) -> RoutePoint:

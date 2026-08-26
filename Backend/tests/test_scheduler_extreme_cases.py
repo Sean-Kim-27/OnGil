@@ -7,12 +7,14 @@ os.environ.setdefault("GOOGLE_CLIENT_ID", "test.apps.googleusercontent.com")
 os.environ.setdefault("KAKAO_APP_ID", "1234")
 os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-with-32-characters")
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from api.guestbook.models import Guestbook  # noqa: F401 - register all FK tables
 from api.place.models import MemoryPlace, Place
 from api.scheduler.models import MobilityMode, Scheduler, SchedulerPlace
 from api.scheduler.route_optimizer import RoutePoint
@@ -20,7 +22,7 @@ from api.scheduler.router import get_route_verifier
 from api.scheduler.router import router as scheduler_router
 from core.database import Base
 from core.dependencies import get_current_user, get_db
-from infra.kakao_route import RouteLeg
+from infra.kakao_route import KakaoRouteClient, RouteLeg
 
 
 class CountingRouteVerifier:
@@ -95,6 +97,7 @@ class TestSchedulerExtremeCases:
         app.dependency_overrides[get_db] = override_db
         app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=88)
         app.dependency_overrides[get_route_verifier] = lambda: self.verifier
+        self.app = app
         self.client = TestClient(app)
 
     def teardown_method(self) -> None:
@@ -130,6 +133,95 @@ class TestSchedulerExtremeCases:
         )
         assert {place["day_no"] for place in stored_places} == {1, 2}
         _assert_schedule_invariants(body)
+
+    def test_late_first_day_keeps_dinner_instead_of_deferring_restaurants(self) -> None:
+        """Regression for production scheduler 26: day 1 had no restaurant."""
+
+        live_places = [
+            ("2904906", "cultural_facility", 37.5559746682, 126.9645531466),
+            ("1799798", "cultural_facility", 37.5558524631, 126.964722579),
+            ("3458089", "cafe", 37.5563607992, 126.9681750278),
+            ("3532628", "accommodation", 37.5523307075, 126.9679446073),
+            ("3532629", "accommodation", 37.5523307075, 126.9679446073),
+            ("3354907", "cafe", 37.5661041865, 126.9723827022),
+            ("2786072", "cafe", 37.5623853579, 126.982615208),
+            ("2855577", "cafe", 37.5404681946, 126.9677782911),
+            ("133854", "restaurant", 37.5630517738, 126.9729271831),
+            ("134746", "restaurant", 37.5621214856, 126.9818402861),
+            ("133858", "restaurant", 37.5634241535, 126.9841178194),
+            ("134268", "restaurant", 37.5641518402, 126.9837706082),
+            ("232231", "restaurant", 37.560599379, 126.9783906441),
+        ]
+        places = [
+            {
+                "content_id": content_id,
+                "title": f"운영 회귀 장소 {content_id}",
+                "category": category,
+                "latitude": latitude,
+                "longitude": longitude,
+            }
+            for content_id, category, latitude, longitude in live_places
+        ]
+
+        route_requests = 0
+
+        def fail_if_kakao_is_called(request: httpx.Request) -> httpx.Response:
+            nonlocal route_requests
+            route_requests += 1
+            return httpx.Response(500, request=request)
+
+        with httpx.Client(
+            transport=httpx.MockTransport(fail_if_kakao_is_called)
+        ) as client:
+            verifier = KakaoRouteClient(rest_api_key="test-key", client=client)
+            self.app.dependency_overrides[get_route_verifier] = lambda: verifier
+            payload = scheduler_payload(
+                places,
+                mobility_mode="WALK",
+                start_datetime="2026-08-25T15:28:57+09:00",
+                end_datetime="2026-08-27T16:20:00+09:00",
+            )
+            payload["memory_place"] = {
+                "name": "서울역",
+                "latitude": 37.55406888733184,
+                "longitude": 126.97070335253385,
+            }
+            response = self.client.post(
+                "/api/v1/schedulers",
+                json=payload,
+            )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["route_verified"] is False
+        assert route_requests == 0
+        scheduled = response.json()["places"]
+        meals_by_day = {
+            day_no: [
+                place
+                for place in scheduled
+                if place["day_no"] == day_no and place["schedule_role"] == "MEAL"
+            ]
+            for day_no in (1, 2, 3)
+        }
+        summary = [
+            (
+                place["day_no"],
+                place["place"]["category"],
+                place["schedule_role"],
+                place["scheduled_start_datetime"],
+            )
+            for place in scheduled
+        ]
+        assert meals_by_day[1], (
+            f"첫날 저녁 가능 시간대에 식당이 반드시 배치되어야 함: {summary}"
+        )
+        assert meals_by_day[2], "중간 날짜에 식당이 반드시 배치되어야 함"
+        assert meals_by_day[3], (
+            "마지막 날 점심 가능 시간대에 식당이 반드시 배치되어야 함"
+        )
+        assert sum(len(meals) for meals in meals_by_day.values()) == 4
+        assert sum(place["schedule_role"] == "SNACK" for place in scheduled) == 1
+        _assert_schedule_invariants(response.json())
 
     def test_accommodation_is_fixed_to_check_in_and_check_out_preferences(self) -> None:
         places = [
@@ -432,22 +524,17 @@ class TestSchedulerExtremeCases:
             assert db.scalar(select(func.count(Place.id))) == 31
             assert db.scalar(select(func.count(SchedulerPlace.id))) == 31
 
-    def test_rejects_more_than_kakao_one_call_limits_without_writes(self) -> None:
-        cases = [
-            ("WALK", 7),
-            ("CAR", 32),
-        ]
-        for mobility_mode, place_count in cases:
-            response = self.client.post(
-                "/api/v1/schedulers",
-                json=scheduler_payload(
-                    [selected_place(index, "cafe") for index in range(place_count)],
-                    mobility_mode=mobility_mode,
-                    end_datetime="2026-09-08T20:00:00+09:00",
-                ),
-            )
+    def test_rejects_more_than_global_place_limit_without_writes(self) -> None:
+        response = self.client.post(
+            "/api/v1/schedulers",
+            json=scheduler_payload(
+                [selected_place(index, "cafe") for index in range(32)],
+                mobility_mode="CAR",
+                end_datetime="2026-09-08T20:00:00+09:00",
+            ),
+        )
 
-            assert response.status_code == 422
+        assert response.status_code == 422
 
         assert self.verifier.calls == 0
         self._assert_database_empty()

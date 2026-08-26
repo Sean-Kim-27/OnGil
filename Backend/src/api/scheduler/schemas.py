@@ -192,6 +192,20 @@ class SchedulerCreateRequest(BaseModel):
     start_datetime: AwareDatetime
     end_datetime: AwareDatetime
 
+    @field_validator("places", mode="before")
+    @classmethod
+    def _accept_legacy_scheduled_place_wrappers(cls, value: object) -> object:
+        """Keep deployed clients working while the server owns all scheduling."""
+
+        if not isinstance(value, list):
+            return value
+        return [
+            item["place"]
+            if isinstance(item, dict) and isinstance(item.get("place"), dict)
+            else item
+            for item in value
+        ]
+
     @model_validator(mode="after")
     def _validate_scheduler(self) -> Self:
         if self.end_datetime <= self.start_datetime:
@@ -204,10 +218,6 @@ class SchedulerCreateRequest(BaseModel):
         content_ids = [item.content_id for item in self.places]
         if len(content_ids) != len(set(content_ids)):
             raise ValueError("같은 장소를 한 스케줄러에 중복 선택할 수 없습니다.")
-        if self.mobility_mode == MobilityMode.WALK and len(self.places) > 6:
-            raise ValueError(
-                "도보 일정은 카카오 API 1회 호출 기준 장소를 최대 6개까지 선택할 수 있습니다."
-            )
         accommodation_count = sum(
             place.category == PlaceCategory.ACCOMMODATION for place in self.places
         )

@@ -90,13 +90,6 @@ class SchedulerService:
             ordered_places = tuple(
                 selections_by_key[point.key] for point in optimized.ordered_stops
             )
-            ordered_places = reorder_restaurants_for_meal_windows(
-                origin,
-                ordered_places,
-                mobility_mode=request.mobility_mode,
-                start_datetime=request.start_datetime,
-                end_datetime=request.end_datetime,
-            )
             ordered_places = reorder_accommodations_for_check_in(
                 origin,
                 ordered_places,
@@ -105,6 +98,13 @@ class SchedulerService:
                     for place in request.places
                     if place.category == PlaceCategory.ACCOMMODATION
                 ),
+                mobility_mode=request.mobility_mode,
+                start_datetime=request.start_datetime,
+                end_datetime=request.end_datetime,
+            )
+            ordered_places, meal_restaurant_ids = reorder_restaurants_for_meal_windows(
+                origin,
+                ordered_places,
                 mobility_mode=request.mobility_mode,
                 start_datetime=request.start_datetime,
                 end_datetime=request.end_datetime,
@@ -133,6 +133,7 @@ class SchedulerService:
                 route_legs,
                 start_datetime=request.start_datetime,
                 end_datetime=request.end_datetime,
+                meal_restaurant_ids=meal_restaurant_ids,
             )
         except (ScheduleWindowError, ValueError) as exc:
             raise ScheduleOptimizationError(str(exc)) from exc
@@ -249,14 +250,6 @@ class SchedulerService:
             ordered_places = tuple(
                 selections_by_key[point.key] for point in optimized.ordered_stops
             )
-            ordered_places = reorder_restaurants_for_meal_windows(
-                origin,
-                ordered_places,
-                mobility_mode=scheduler.mobility_mode,
-                start_datetime=scheduler.start_datetime,
-                end_datetime=scheduler.end_datetime,
-                accommodation_stays=accommodation_stays,
-            )
             ordered_places = reorder_accommodations_for_check_in(
                 origin,
                 ordered_places,
@@ -264,6 +257,14 @@ class SchedulerService:
                     selections_by_scheduler_place_id[stay.scheduler_place_id]
                     for stay in ordered_stays
                 ),
+                mobility_mode=scheduler.mobility_mode,
+                start_datetime=scheduler.start_datetime,
+                end_datetime=scheduler.end_datetime,
+                accommodation_stays=accommodation_stays,
+            )
+            ordered_places, meal_restaurant_ids = reorder_restaurants_for_meal_windows(
+                origin,
+                ordered_places,
                 mobility_mode=scheduler.mobility_mode,
                 start_datetime=scheduler.start_datetime,
                 end_datetime=scheduler.end_datetime,
@@ -288,6 +289,7 @@ class SchedulerService:
                 start_datetime=scheduler.start_datetime,
                 end_datetime=scheduler.end_datetime,
                 accommodation_stays=accommodation_stays,
+                meal_restaurant_ids=meal_restaurant_ids,
             )
         except (ScheduleWindowError, ValueError) as exc:
             raise ScheduleOptimizationError(str(exc)) from exc

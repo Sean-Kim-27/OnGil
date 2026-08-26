@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from api.guestbook.models import Guestbook  # noqa: F401 - register all FK tables
 from api.place.models import MemoryPlace, Place
 from api.scheduler.models import MobilityMode, Scheduler, SchedulerPlace
 from api.scheduler.route_optimizer import RoutePoint
@@ -122,6 +123,31 @@ class SchedulerCreationFlowTests(unittest.TestCase):
             self.assertEqual(db.scalar(select(func.count(MemoryPlace.id))), 1)
             self.assertEqual(db.scalar(select(func.count(Place.id))), 2)
             self.assertEqual(db.scalar(select(func.count(SchedulerPlace.id))), 2)
+
+    def test_legacy_frontend_order_is_accepted_and_replaced_by_server_plan(
+        self,
+    ) -> None:
+        payload = scheduler_payload()
+        payload["places"] = [
+            {
+                "place": place,
+                "day_no": 9,
+                "time_slot": "NIGHT",
+                "visit_order": 99,
+            }
+            for place in payload["places"]
+        ]
+
+        response = self.client.post("/api/v1/schedulers", json=payload)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            all(place["day_no"] == 1 for place in response.json()["places"])
+        )
+        self.assertEqual(
+            [place["visit_order"] for place in response.json()["places"]],
+            [1, 2],
+        )
 
     def test_kakao_verification_runs_once_before_any_write(self) -> None:
         engine = self.engine

@@ -217,8 +217,9 @@ Content-Type: application/json
 생성 후 장소의 순서와 시간은
 `PATCH /api/v1/schedulers/{scheduler_id}/places/{scheduler_place_id}`로 수정할 수
 있습니다. `scheduled_start_datetime`과 `scheduled_end_datetime`은 전체 일정 범위
-안에 있어야 합니다. 카카오 1회 호출의 경유지 제한 때문에 도보는 선택 장소
-6개, 자동차는 31개까지 허용합니다.
+안에 있어야 합니다. 선택 장소는 최대 31개까지 허용합니다. 도보 장소가 카카오
+1회 경로 검증 한도인 6개를 초과하면 요청을 거절하지 않고 로컬 거리·이동시간
+추정으로 일정을 생성하며, 이때 `route_verified`는 `false`입니다.
 
 숙박 범위와 숙소 순서는 전체 교체 API로 함께 수정합니다. 최초 일정 생성에는
 `stays`를 보내지 않아도 되며, 생성 응답의 숙소 `SchedulerPlace.id`를 수정 요청에

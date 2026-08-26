@@ -59,6 +59,24 @@ class SchedulerDatetimeValidationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_accepts_legacy_place_wrappers_but_server_owns_schedule(self) -> None:
+        request = SchedulerCreateRequest.model_validate(
+            {
+                **self.payload,
+                "places": [
+                    {
+                        "place": self.payload["places"][0],
+                        "day_no": 9,
+                        "time_slot": "NIGHT",
+                        "visit_order": 99,
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(request.places[0].content_id, "tour-1")
+        self.assertFalse(hasattr(request.places[0], "day_no"))
+
     def test_rejects_mixed_timezone_datetimes_with_422(self) -> None:
         response = self.client.post(
             "/schedulers",
