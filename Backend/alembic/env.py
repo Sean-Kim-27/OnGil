@@ -1,23 +1,23 @@
+import os
+import sys
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
-import sys
-import os
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+)
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
-
-from core.database import Base
 # 니가 만든 models 파일들을 전부 임포트해와야 Alembic이 테이블을 인식한다!
-from api.auth.models import User
-from api.place.models import Place, ArchivePhoto, MemoryPlace
-from api.scheduler.models import Scheduler, SchedulerPlace
-from api.guestbook.models import Guestbook
-
-
+from api.auth.models import User  # noqa: F401
+from api.guestbook.models import Guestbook  # noqa: F401
+from api.moderation.models import GuestbookReport, UserBlock  # noqa: F401
+from api.place.models import ArchivePhoto, MemoryPlace, Place  # noqa: F401
+from api.scheduler.models import Scheduler, SchedulerPlace  # noqa: F401
+from core.config import settings
+from core.database import Base
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -31,7 +31,6 @@ if config.config_file_name is not None:
 # 원래 target_metadata = None 으로 되어있던 걸 밑에처럼 바꿔라
 target_metadata = Base.metadata
 
-from core.config import settings
 # alembic.ini에 적힌 sqlalchemy.url을 무시하고, 환경변수 주입
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
@@ -79,9 +78,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()
