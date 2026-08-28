@@ -1,8 +1,12 @@
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from typing import Annotated
+
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 
 from api.guestbook.schemas import (
     ArchivePhotoResponse,
     GuestbookContentUpdateRequest,
+    GuestbookFeedItemResponse,
+    GuestbookFeedResponse,
     GuestbookResponse,
 )
 from api.guestbook.service import (
@@ -30,6 +34,51 @@ def list_guestbooks(
     service = GuestbookService(db)
     guestbooks = service.list_owned(current_user.id)
     return [GuestbookResponse.model_validate(guestbook) for guestbook in guestbooks]
+
+
+@router.get(
+    "/feed",
+    response_model=GuestbookFeedResponse,
+    summary="차단한 사용자를 제외한 방명록 피드 조회",
+)
+def list_guestbook_feed(
+    current_user: CurrentUser,
+    db: DatabaseSession,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> GuestbookFeedResponse:
+    service = GuestbookService(db)
+    guestbooks, total = service.list_visible(current_user.id, limit, offset)
+    return GuestbookFeedResponse(
+        items=[
+            GuestbookFeedItemResponse.model_validate(guestbook)
+            for guestbook in guestbooks
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/{guestbook_id}",
+    response_model=GuestbookFeedItemResponse,
+    summary="방명록 단건 조회 (차단 사용자 제외)",
+)
+def get_visible_guestbook(
+    guestbook_id: int,
+    current_user: CurrentUser,
+    db: DatabaseSession,
+) -> GuestbookFeedItemResponse:
+    service = GuestbookService(db)
+    try:
+        guestbook = service.get_visible(current_user.id, guestbook_id)
+    except GuestbookNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    return GuestbookFeedItemResponse.model_validate(guestbook)
 
 
 @router.get(
@@ -83,9 +132,9 @@ async def upload_archive_photo(
     place_id: int,
     current_user: CurrentUser,
     db: DatabaseSession,
-    photo_type: PhotoType = Form(...),
-    taken_year: int | None = Form(default=None, ge=1900),
-    image: UploadFile = File(...),
+    photo_type: Annotated[PhotoType, Form()],
+    image: Annotated[UploadFile, File()],
+    taken_year: Annotated[int | None, Form(ge=1900)] = None,
 ) -> ArchivePhotoResponse:
     try:
         image_url = await save_uploaded_photo(image, subdirectory="guestbook-photos")

@@ -282,6 +282,60 @@ class NewFeatureResponse(BaseModel):
     name: str
 
     # DB 모델 객체(SQLAlchemy)를 JSON으로 자동 변환해 주는 필수 옵션입니다.
-    class Config:
+class Config:
         from_attributes = True
 ```
+
+---
+
+## 5. 방명록 신고·사용자 차단·관리자 처리
+
+방명록 탭은 인증된 사용자가 다른 사용자의 공개 방명록을 열람하고, 부적절한
+콘텐츠를 신고하거나 작성자를 차단할 수 있도록 구성되어 있습니다.
+
+### 사용자 API
+
+| Method | Path | 설명 |
+| --- | --- | --- |
+| `GET` | `/api/v1/guestbooks/feed` | 내가 차단한 작성자를 제외한 방명록 피드 |
+| `GET` | `/api/v1/guestbooks/{guestbook_id}` | 차단 필터가 적용된 방명록 단건 조회 |
+| `POST` | `/api/v1/guestbooks/{guestbook_id}/reports` | 방명록 신고 |
+| `GET` | `/api/v1/user-blocks` | 내가 차단한 사용자 목록 |
+| `PUT` | `/api/v1/user-blocks/{blocked_user_id}` | 사용자 차단(중복 요청 안전) |
+| `DELETE` | `/api/v1/user-blocks/{blocked_user_id}` | 사용자 차단 해제(중복 요청 안전) |
+
+신고 사유는 `SPAM`, `HARASSMENT`, `HATE_SPEECH`, `SEXUAL_CONTENT`,
+`VIOLENCE`, `PRIVACY`, `ILLEGAL`, `OTHER` 중 하나입니다. 같은 사용자가 같은
+방명록을 중복 신고하면 `409 Conflict`를 반환합니다. 신고 시점의 텍스트와 사진
+URL은 별도 스냅샷으로 보존되어 원문 수정 후에도 관리자가 검토할 수 있습니다.
+
+차단은 방향성이 있습니다. A가 B를 차단하면 A의 피드와 단건 조회에서 B의
+방명록만 제외되며, B가 A를 자동으로 차단하는 것은 아닙니다. 차단된 방명록의
+단건 조회는 차단 관계 노출을 막기 위해 일반적인 미존재 응답과 동일하게 `404`를
+반환합니다.
+
+### 관리자 API
+
+| Method | Path | 설명 |
+| --- | --- | --- |
+| `GET` | `/api/v1/admin/guestbook-reports` | 상태별 신고 큐 조회 및 페이지네이션 |
+| `PATCH` | `/api/v1/admin/guestbook-reports/{report_id}` | 상태와 관리자 메모 갱신 |
+
+처리 상태는 `PENDING`, `REVIEWING`, `RESOLVED`, `DISMISSED`입니다. 관리자
+API는 `users.is_admin = true`인 계정만 접근할 수 있고, 공개 승격 API는 제공하지
+않습니다. 최초 관리자는 운영자가 신뢰할 수 있는 사용자 ID를 확인한 뒤 DB에서
+명시적으로 지정합니다.
+
+```sql
+UPDATE users SET is_admin = true WHERE id = <trusted_user_id>;
+```
+
+배포 전 새 테이블과 관리자 컬럼을 적용합니다.
+
+```bash
+alembic upgrade head
+```
+
+Flutter 방명록 탭에는 각 타인 방명록의 메뉴에서 `신고하기`와 `사용자 차단`을
+직접 실행할 수 있는 UI가 연결되어 있습니다. 차단 성공 시 해당 작성자의 모든
+방명록을 즉시 화면에서 제거하며, 스낵바의 실행 취소로 차단을 되돌릴 수 있습니다.

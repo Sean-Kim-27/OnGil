@@ -15,6 +15,7 @@ import 'settings_screen.dart';
 import 'recommendation_list_screen.dart';
 import 'schedule_list_screen.dart';
 import 'map_screen.dart';
+import 'guestbook_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -129,7 +130,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // 하단 탭에 따라 몸통 내용을 바꿔줌. 홈에서 검색한 결과(_searchResult)를 지도 탭에도
   // 넘겨줘서, 홈에서 '부산역'을 검색했으면 지도도 그 근처로 이동하고 스케줄링도 그
-  // 근처 실제 장소들로 시작하게 함. 방명록만 아직 화면이 없어서 '준비 중'.
+  // 근처 실제 장소들로 시작하게 함.
   Widget _buildTabBody(BuildContext context) {
     switch (_navIndex) {
       case 0:
@@ -137,7 +138,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case 1:
         return const ScheduleListScreen();
       case 3:
-        return const _ComingSoonTab(icon: Icons.menu_book_outlined, label: '방명록');
+        return const GuestbookScreen();
       case 2:
       default:
         return _buildHomeContent(context);
@@ -296,29 +297,6 @@ class _GreetingSection extends StatelessWidget {
           style: AppTextStyles.heroGreeting,
         ),
       ],
-    );
-  }
-}
-
-/// 지도/방명록처럼 아직 화면이 준비 안 된 탭에 보여주는 자리표시자.
-class _ComingSoonTab extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  const _ComingSoonTab({required this.icon, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 40, color: AppColors.textSecondary),
-            const SizedBox(height: 12),
-            Text('$label 화면은 준비 중이에요', style: AppTextStyles.body),
-          ],
-        ),
-      ),
     );
   }
 }

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from api.guestbook.models import Guestbook
+from api.moderation.models import UserBlock
 from api.place.models import ArchivePhoto, PhotoType
 from api.scheduler.models import Scheduler, SchedulerPlace
 
@@ -58,7 +59,58 @@ class GuestbookService:
             )
         )
 
-    def update_content(self, user_id: int, place_id: int, content: str | None) -> Guestbook:
+    def list_visible(
+        self,
+        viewer_user_id: int,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[Guestbook], int]:
+        blocked_user_ids = select(UserBlock.blocked_user_id).where(
+            UserBlock.blocker_user_id == viewer_user_id
+        )
+        visible_filter = ~Guestbook.user_id.in_(blocked_user_ids)
+
+        guestbooks = list(
+            self.db.scalars(
+                select(Guestbook)
+                .options(
+                    selectinload(Guestbook.photos),
+                    selectinload(Guestbook.author),
+                    selectinload(Guestbook.place),
+                )
+                .where(visible_filter)
+                .order_by(Guestbook.created_at.desc(), Guestbook.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+        total = self.db.scalar(select(func.count(Guestbook.id)).where(visible_filter))
+        return guestbooks, int(total or 0)
+
+    def get_visible(self, viewer_user_id: int, guestbook_id: int) -> Guestbook:
+        blocked_user_ids = select(UserBlock.blocked_user_id).where(
+            UserBlock.blocker_user_id == viewer_user_id
+        )
+        guestbook = self.db.scalar(
+            select(Guestbook)
+            .options(
+                selectinload(Guestbook.photos),
+                selectinload(Guestbook.author),
+                selectinload(Guestbook.place),
+            )
+            .where(
+                Guestbook.id == guestbook_id,
+                ~Guestbook.user_id.in_(blocked_user_ids),
+            )
+        )
+        if guestbook is None:
+            # 차단 여부가 외부에 노출되지 않도록 존재하지 않는 항목과 동일하게 처리한다.
+            raise GuestbookNotFoundError("방명록을 찾을 수 없습니다.")
+        return guestbook
+
+    def update_content(
+        self, user_id: int, place_id: int, content: str | None
+    ) -> Guestbook:
         self._ensure_place_visited(user_id, place_id)
         guestbook = self._get_or_create(user_id, place_id)
         guestbook.content = content

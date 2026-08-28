@@ -1,4 +1,12 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.sql import func
 
 from core.database import Base
@@ -20,6 +28,14 @@ class User(Base):
     status = Column(
         String(20), default="PENDING"
     )  # PENDING(프로필 미설정), ACTIVE(정상가입완료)
+
+    # 관리자 대시보드 API 접근 권한. 최초 관리자는 운영 DB에서 명시적으로 승격한다.
+    is_admin = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())

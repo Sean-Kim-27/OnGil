@@ -46,6 +46,7 @@ class AuthService {
 
   // 백엔드 API 주소 
   final String _backendUrl = 'https://api.seankim428.site/api/v1/auth/social-login';
+  final String _meUrl = 'https://api.seankim428.site/api/v1/auth/me';
 
   /// clientId / serverClientId는 구글 클라우드 콘솔에서 만든 OAuth 클라이언트
   Future<void> initializeGoogle({String? clientId, String? serverClientId}) async {
@@ -198,11 +199,37 @@ class AuthService {
     if (onGilRefreshToken != null && onGilRefreshToken.isNotEmpty) {
       await _storage.write(key: 'refreshToken', value: onGilRefreshToken);
     }
+
+    final dynamic userPayload = data['user'] ??
+        (nested is Map ? nested['user'] : null);
+    if (userPayload is Map && userPayload['id'] != null) {
+      await _storage.write(key: 'userId', value: userPayload['id'].toString());
+    }
   }
 
   // 추후 앱 내 다른 화면에서 온길 토큰이 필요할 때 꺼내 쓰는 용도
   Future<String?> getOnGilAccessToken() async {
     return await _storage.read(key: 'accessToken');
+  }
+
+  /// 현재 온길 사용자 ID. 예전 로그인 세션처럼 로컬에 ID가 없으면 /auth/me에서 보충한다.
+  Future<int?> getCurrentUserId() async {
+    final stored = await _storage.read(key: 'userId');
+    final storedId = int.tryParse(stored ?? '');
+    if (storedId != null) return storedId;
+
+    final response = await authorizedGet(Uri.parse(_meUrl));
+    if (response.statusCode != 200) return null;
+    try {
+      final data = jsonDecode(utf8.decode(response.bodyBytes));
+      final id = data is Map<String, dynamic> ? data['id'] as int? : null;
+      if (id != null) {
+        await _storage.write(key: 'userId', value: id.toString());
+      }
+      return id;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 회원가입 화면에서 확정한 닉네임·프로필 사진을 로컬에 저장.
@@ -274,6 +301,22 @@ class AuthService {
       headers: await _authHeaders(),
       body: body,
     );
+    await _handleUnauthorized(response);
+    return response;
+  }
+
+  Future<http.Response> authorizedPut(Uri url, {Object? body}) async {
+    final response = await http.put(
+      url,
+      headers: await _authHeaders(),
+      body: body,
+    );
+    await _handleUnauthorized(response);
+    return response;
+  }
+
+  Future<http.Response> authorizedDelete(Uri url) async {
+    final response = await http.delete(url, headers: await _authHeaders());
     await _handleUnauthorized(response);
     return response;
   }

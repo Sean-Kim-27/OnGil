@@ -1,6 +1,6 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint
-from sqlalchemy.sql import func
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 
 from core.database import Base
 
@@ -25,6 +25,8 @@ class Guestbook(Base):
     photos = relationship(
         "ArchivePhoto", back_populates="guestbook", cascade="all, delete-orphan"
     )
+    author = relationship("User")
+    place = relationship("Place")
 
     __table_args__ = (
         UniqueConstraint("user_id", "place_id", name="uq_guestbook_user_place"),

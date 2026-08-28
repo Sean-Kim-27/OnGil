@@ -33,6 +33,7 @@ class UserResponse(BaseModel):
     nickname: str | None
     profile_image_url: str | None
     status: str
+    is_admin: bool = False
 
 
 class SocialLoginResponse(BaseModel):

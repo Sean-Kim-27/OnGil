@@ -34,4 +34,33 @@ class GuestbookResponse(BaseModel):
     place_id: int
     content: str | None
     created_at: datetime
-    photos: list[ArchivePhotoResponse] = []
+    photos: list[ArchivePhotoResponse] = Field(default_factory=list)
+
+
+class GuestbookAuthorResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nickname: str | None
+    profile_image_url: str | None
+
+
+class GuestbookPlaceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    category: str
+    image_url: str | None
+
+
+class GuestbookFeedItemResponse(GuestbookResponse):
+    author: GuestbookAuthorResponse
+    place: GuestbookPlaceResponse
+
+
+class GuestbookFeedResponse(BaseModel):
+    items: list[GuestbookFeedItemResponse]
+    total: int
+    limit: int
+    offset: int
