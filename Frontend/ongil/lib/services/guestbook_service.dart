@@ -1,145 +1,123 @@
 import 'dart:convert';
 
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../models/guestbook_entry.dart';
-import 'auth_service.dart';
+import '../models/memory_archive_entry.dart';
 
-enum GuestbookReportReason {
-  spam('SPAM', '스팸·광고'),
-  harassment('HARASSMENT', '괴롭힘·모욕'),
-  hateSpeech('HATE_SPEECH', '혐오 표현'),
-  sexualContent('SEXUAL_CONTENT', '성적 콘텐츠'),
-  violence('VIOLENCE', '폭력적 콘텐츠'),
-  privacy('PRIVACY', '개인정보 노출'),
-  illegal('ILLEGAL', '불법 콘텐츠'),
-  other('OTHER', '기타');
-
-  final String apiValue;
-  final String label;
-  const GuestbookReportReason(this.apiValue, this.label);
-}
-
-class GuestbookApiException implements Exception {
-  final String message;
-  const GuestbookApiException(this.message);
-
-  @override
-  String toString() => message;
-}
-
-abstract class GuestbookRepository {
-  Future<int?> fetchCurrentUserId();
-  Future<GuestbookFeed> fetchFeed({int limit = 50, int offset = 0});
-  Future<void> reportGuestbook({
-    required int guestbookId,
-    required GuestbookReportReason reason,
-    String? details,
-  });
-  Future<void> blockUser(int userId);
-  Future<void> unblockUser(int userId);
-}
-
-class GuestbookService implements GuestbookRepository {
+/// 방명록 / 아카이브 로컬 저장소.
+///
+/// 백엔드 guestbook API가 아직 없어서 기기에 JSON으로 저장함.
+/// TODO: 서버 API가 생기면 메서드 본문만 http 호출로 교체.
+class GuestbookService {
   GuestbookService._();
   static final GuestbookService instance = GuestbookService._();
 
-  static const String _defaultHost = 'https://api.seankim428.site';
+  static const _storage = FlutterSecureStorage();
+  static const _entriesKey = 'guestbook_entries_v1';
+  static const _archiveKey = 'guestbook_archive_v1';
 
-  static String get _baseUrl {
-    var host = dotenv.env['BASE_URL'] ?? _defaultHost;
-    if (host.isEmpty) host = _defaultHost;
-    if (host.endsWith('/')) host = host.substring(0, host.length - 1);
-    return host.endsWith('/api/v1') ? host : '$host/api/v1';
-  }
+  // ---------------------------------------------------------------------------
+  // 공용 헬퍼
+  // ---------------------------------------------------------------------------
 
-  static String resolveMediaUrl(String path) {
-    final parsed = Uri.tryParse(path);
-    if (parsed != null && parsed.hasScheme) return path;
-    final host = _baseUrl.replaceFirst(RegExp(r'/api/v1$'), '');
-    return path.startsWith('/') ? '$host$path' : '$host/$path';
-  }
-
-  @override
-  Future<int?> fetchCurrentUserId() {
-    return AuthService.instance.getCurrentUserId();
-  }
-
-  @override
-  Future<GuestbookFeed> fetchFeed({int limit = 50, int offset = 0}) async {
-    final uri = Uri.parse('$_baseUrl/guestbooks/feed').replace(
-      queryParameters: {
-        'limit': limit.toString(),
-        'offset': offset.toString(),
-      },
-    );
-    final response = await AuthService.instance.authorizedGet(uri);
-    if (response.statusCode != 200) {
-      throw GuestbookApiException(
-        _errorMessage(response.bodyBytes, '방명록을 불러오지 못했어요.'),
-      );
-    }
-    final data = jsonDecode(utf8.decode(response.bodyBytes));
-    if (data is! Map<String, dynamic>) {
-      throw const GuestbookApiException('방명록 응답 형식이 올바르지 않아요.');
-    }
-    return GuestbookFeed.fromJson(data);
-  }
-
-  @override
-  Future<void> reportGuestbook({
-    required int guestbookId,
-    required GuestbookReportReason reason,
-    String? details,
-  }) async {
-    final response = await AuthService.instance.authorizedPost(
-      Uri.parse('$_baseUrl/guestbooks/$guestbookId/reports'),
-      body: jsonEncode({
-        'reason': reason.apiValue,
-        if (details != null && details.trim().isNotEmpty)
-          'details': details.trim(),
-      }),
-    );
-    if (response.statusCode != 201) {
-      throw GuestbookApiException(
-        _errorMessage(response.bodyBytes, '신고를 접수하지 못했어요.'),
-      );
-    }
-  }
-
-  @override
-  Future<void> blockUser(int userId) async {
-    final response = await AuthService.instance.authorizedPut(
-      Uri.parse('$_baseUrl/user-blocks/$userId'),
-    );
-    if (response.statusCode != 200) {
-      throw GuestbookApiException(
-        _errorMessage(response.bodyBytes, '사용자를 차단하지 못했어요.'),
-      );
-    }
-  }
-
-  @override
-  Future<void> unblockUser(int userId) async {
-    final response = await AuthService.instance.authorizedDelete(
-      Uri.parse('$_baseUrl/user-blocks/$userId'),
-    );
-    if (response.statusCode != 204) {
-      throw GuestbookApiException(
-        _errorMessage(response.bodyBytes, '차단을 해제하지 못했어요.'),
-      );
-    }
-  }
-
-  static String _errorMessage(List<int> bodyBytes, String fallback) {
+  Future<List<Map<String, dynamic>>> _readRaw(String key) async {
+    final raw = await _storage.read(key: key);
+    if (raw == null || raw.isEmpty) return [];
     try {
-      final data = jsonDecode(utf8.decode(bodyBytes));
-      if (data is Map<String, dynamic> && data['detail'] is String) {
-        return data['detail'] as String;
-      }
-    } catch (_) {
-      // 서버가 JSON이 아닌 오류를 반환하면 사용자에게 안전한 기본 문구를 보여준다.
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return [];
+      return decoded.whereType<Map<String, dynamic>>().toList();
+    } catch (e) {
+      // 저장 형식이 깨졌으면 빈 목록으로 시작.
+      debugPrint('⚠️ [GuestbookService] 저장된 데이터를 읽지 못했습니다($key): $e');
+      return [];
     }
-    return fallback;
+  }
+
+  Future<void> _writeRaw(String key, List<Map<String, dynamic>> list) async {
+    await _storage.write(key: key, value: jsonEncode(list));
+  }
+
+  // ---------------------------------------------------------------------------
+  // 방명록
+  // ---------------------------------------------------------------------------
+
+  /// 해당 여정에 남긴 글만 최신순으로.
+  Future<List<GuestbookEntry>> loadEntries(int scheduleId) async {
+    final raw = await _readRaw(_entriesKey);
+    final entries = raw
+        .map(GuestbookEntry.fromJson)
+        .where((e) => e.scheduleId == scheduleId)
+        .toList();
+    entries.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return entries;
+  }
+
+  Future<void> addEntry(GuestbookEntry entry) async {
+    final raw = await _readRaw(_entriesKey);
+    raw.insert(0, entry.toJson());
+    await _writeRaw(_entriesKey, raw);
+  }
+
+  /// 같은 id의 글을 새 내용으로 교체(수정). 없으면 새로 추가함.
+  Future<void> updateEntry(GuestbookEntry entry) async {
+    final raw = await _readRaw(_entriesKey);
+    final index = raw.indexWhere((m) => '${m['id']}' == entry.id);
+    if (index >= 0) {
+      raw[index] = entry.toJson();
+    } else {
+      raw.insert(0, entry.toJson());
+    }
+    await _writeRaw(_entriesKey, raw);
+  }
+
+  Future<void> removeEntry(String id) async {
+    final raw = await _readRaw(_entriesKey);
+    raw.removeWhere((m) => '${m['id']}' == id);
+    await _writeRaw(_entriesKey, raw);
+  }
+
+  // ---------------------------------------------------------------------------
+  // 아카이브 (그때-지금 사진)
+  // ---------------------------------------------------------------------------
+
+  Future<List<MemoryArchiveEntry>> loadArchive(int scheduleId) async {
+    final raw = await _readRaw(_archiveKey);
+    final items = raw
+        .map(MemoryArchiveEntry.fromJson)
+        .where((e) => e.scheduleId == scheduleId)
+        .toList();
+    items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return items;
+  }
+
+  Future<void> addArchive(MemoryArchiveEntry entry) async {
+    final raw = await _readRaw(_archiveKey);
+    // 장소마다 한 건만 두고, 같은 장소면 새 것으로 교체.
+    raw.removeWhere((m) =>
+        '${m['schedule_id']}' == '${entry.scheduleId}' &&
+        '${m['place_name']}' == entry.placeName);
+    raw.insert(0, entry.toJson());
+    await _writeRaw(_archiveKey, raw);
+  }
+
+  /// 같은 id의 아카이브를 새 내용으로 교체(수정).
+  Future<void> updateArchive(MemoryArchiveEntry entry) async {
+    final raw = await _readRaw(_archiveKey);
+    final index = raw.indexWhere((m) => '${m['id']}' == entry.id);
+    if (index >= 0) {
+      raw[index] = entry.toJson();
+    } else {
+      raw.insert(0, entry.toJson());
+    }
+    await _writeRaw(_archiveKey, raw);
+  }
+
+  Future<void> removeArchive(String id) async {
+    final raw = await _readRaw(_archiveKey);
+    raw.removeWhere((m) => '${m['id']}' == id);
+    await _writeRaw(_archiveKey, raw);
   }
 }
