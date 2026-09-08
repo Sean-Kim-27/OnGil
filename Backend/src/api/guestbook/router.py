@@ -1,6 +1,15 @@
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 
 from api.guestbook.schemas import (
     ArchivePhotoResponse,
@@ -99,6 +108,27 @@ def get_guestbook(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         ) from exc
     return GuestbookResponse.model_validate(guestbook)
+
+
+@router.delete(
+    "/{guestbook_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="내 방명록 삭제 (연결된 사진 레코드 포함)",
+    description="작성자만 삭제할 수 있습니다. 관리자 신고 기록과 사진 원본 파일은 보존됩니다.",
+    responses={404: {"description": "방명록이 없거나 본인 소유가 아님"}},
+)
+def delete_guestbook(
+    guestbook_id: int,
+    current_user: CurrentUser,
+    db: DatabaseSession,
+) -> Response:
+    try:
+        GuestbookService(db).delete_owned(current_user.id, guestbook_id)
+    except GuestbookNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.put(

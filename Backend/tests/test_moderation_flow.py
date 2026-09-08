@@ -30,6 +30,8 @@ class ModerationFlowTests(unittest.TestCase):
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
+        with self.engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
         self.session_factory = sessionmaker(
             bind=self.engine,
             autoflush=False,
@@ -171,6 +173,57 @@ class ModerationFlowTests(unittest.TestCase):
 
         restored = self.client.get(f"/api/v1/guestbooks/{self.author_guestbook.id}")
         self.assertEqual(restored.status_code, 200)
+
+    def test_delete_owned_guestbook_preserves_report_and_removes_photos(self) -> None:
+        target = self.author_guestbook
+        report = self.client.post(
+            f"/api/v1/guestbooks/{target.id}/reports",
+            json={"reason": "SPAM"},
+        )
+        self.assertEqual(report.status_code, 201)
+        self.current_user = self.author
+        deleted = self.client.delete(f"/api/v1/guestbooks/{target.id}")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(deleted.content, b"")
+        self.assertEqual(
+            self.client.get(f"/api/v1/guestbooks/{target.id}").status_code, 404
+        )
+        self.assertEqual(
+            self.client.get(f"/api/v1/guestbooks/places/{target.place_id}").status_code,
+            404,
+        )
+        self.assertEqual(self.client.get("/api/v1/guestbooks").json(), [])
+        self.assertEqual(self.client.get("/api/v1/guestbooks/feed").json()["total"], 2)
+        self.assertEqual(
+            self.client.delete(f"/api/v1/guestbooks/{target.id}").status_code, 404
+        )
+        with self.session_factory() as db:
+            self.assertIsNone(db.get(Guestbook, target.id))
+            self.assertEqual(db.scalar(select(func.count(ArchivePhoto.id))), 0)
+            saved_report = db.get(GuestbookReport, report.json()["id"])
+            self.assertIsNone(saved_report.guestbook_id)
+            self.assertEqual(saved_report.content_snapshot, "reported content")
+            self.assertEqual(
+                saved_report.photo_urls_snapshot,
+                ["/media/guestbook-photos/reported.jpg"],
+            )
+            self.assertIsNotNone(db.get(Guestbook, self.viewer_guestbook.id))
+        self.current_user = self.admin
+        reports = self.client.get("/api/v1/admin/guestbook-reports")
+        self.assertEqual(reports.status_code, 200)
+        self.assertEqual(reports.json()["items"][0]["id"], report.json()["id"])
+
+    def test_delete_rejects_non_owner_missing_and_unauthenticated(self) -> None:
+        target_url = f"/api/v1/guestbooks/{self.author_guestbook.id}"
+        self.assertEqual(self.client.delete(target_url).status_code, 404)
+        self.assertEqual(self.client.delete("/api/v1/guestbooks/999999").status_code, 404)
+        self.current_user = self.admin
+        self.assertEqual(self.client.delete(target_url).status_code, 404)
+        app.dependency_overrides.pop(get_current_user)
+        self.assertEqual(self.client.delete(target_url).status_code, 401)
+        with self.session_factory() as db:
+            self.assertIsNotNone(db.get(Guestbook, self.author_guestbook.id))
+            self.assertEqual(db.scalar(select(func.count(ArchivePhoto.id))), 1)
 
     def test_block_is_directional_and_rejects_invalid_targets(self) -> None:
         response = self.client.put(f"/api/v1/user-blocks/{self.author.id}")
