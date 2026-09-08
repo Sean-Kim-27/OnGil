@@ -118,6 +118,22 @@ class GuestbookService:
         self.db.refresh(guestbook)
         return guestbook
 
+    def delete_owned(self, user_id: int, guestbook_id: int) -> None:
+        guestbook = self.db.scalar(
+            select(Guestbook).where(
+                Guestbook.id == guestbook_id,
+                Guestbook.user_id == user_id,
+            )
+        )
+        if guestbook is None:
+            # 다른 사용자의 글도 미존재와 동일하게 응답한다.
+            raise GuestbookNotFoundError("방명록을 찾을 수 없습니다.")
+
+        # 사진 레코드는 ORM cascade로 제거하고 신고는 FK SET NULL로 보존한다.
+        # 신고 스냅샷이 참조하는 업로드 원본 파일은 여기서 삭제하지 않는다.
+        self.db.delete(guestbook)
+        self.db.commit()
+
     def add_photo(
         self,
         user_id: int,
