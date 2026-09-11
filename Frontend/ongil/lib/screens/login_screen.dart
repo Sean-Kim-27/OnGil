@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../services/auth_service.dart';
 import '../theme/app_colors.dart';
@@ -81,47 +84,88 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.screenHorizontal,
-          ),
-          child: Column(
-            children: [
-              const Spacer(flex: 3),
-              Text(
-                '온길',
-                style: AppTextStyles.logo.copyWith(color: AppColors.accent),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light.copyWith(
+        statusBarColor: Colors.transparent,
+      ),
+      child: Scaffold(
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            const _LoginBackgroundSlideshow(),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0x59000000),
+                    Color(0x1F000000),
+                    Color(0x40000000),
+                    Color(0xB3000000),
+                  ],
+                  stops: [0.0, 0.3, 0.6, 1.0],
+                ),
               ),
-              const SizedBox(height: 10),
-              const Text(
-                '기억 속 그 장소로 돌아가는 길,\n온길과 함께 걸어보세요',
-                textAlign: TextAlign.center,
-                style: AppTextStyles.bodySmall,
+            ),
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.screenHorizontal,
+                ),
+                child: Column(
+                  children: [
+                    const Spacer(flex: 3),
+                    // 워드마크 기본은 21px. 여기는 히어로라 예외로 키움.
+                    Text(
+                      '온길',
+                      style: AppTextStyles.logo.copyWith(
+                        fontSize: 40,
+                        color: AppColors.accent,
+                        shadows: const [
+                          Shadow(color: Colors.black54, blurRadius: 16, offset: Offset(0, 2)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      '기억 속 그 장소로 돌아가는 길,\n온길과 함께 걸어보세요',
+                      textAlign: TextAlign.center,
+                      style: AppTextStyles.heroCopy.copyWith(
+                        fontSize: 15.5,
+                        color: Colors.white.withValues(alpha: 0.95),
+                        shadows: const [
+                          Shadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 1)),
+                        ],
+                      ),
+                    ),
+                    const Spacer(flex: 4),
+                    _KakaoButton(
+                      label: '카카오로 시작하기',
+                      loading: _loadingProvider == 'kakao',
+                      onPressed: _isLoading ? null : () => _signIn('kakao'),
+                    ),
+                    const SizedBox(height: 10),
+                    _GoogleButton(
+                      label: 'Google로 계속하기',
+                      loading: _loadingProvider == 'google',
+                      onPressed: _isLoading ? null : () => _signIn('google'),
+                    ),
+                    const SizedBox(height: AppSpacing.sectionGap),
+                    // 캡션 기본색(textSecondary)은 사진 위에서 안 보여 흰색으로 예외.
+                    Text(
+                      '계속 진행 시 이용약관과\n개인정보처리방침에 동의하게 됩니다',
+                      textAlign: TextAlign.center,
+                      style: AppTextStyles.caption.copyWith(
+                        color: Colors.white.withValues(alpha: 0.85),
+                      ),
+                    ),
+                    const Spacer(flex: 2),
+                  ],
+                ),
               ),
-              const Spacer(flex: 4),
-              _KakaoButton(
-                label: '카카오로 시작하기',
-                loading: _loadingProvider == 'kakao',
-                onPressed: _isLoading ? null : () => _signIn('kakao'),
-              ),
-              const SizedBox(height: 10),
-              _GoogleButton(
-                label: 'Google로 계속하기',
-                loading: _loadingProvider == 'google',
-                onPressed: _isLoading ? null : () => _signIn('google'),
-              ),
-              const SizedBox(height: AppSpacing.sectionGap),
-              const Text(
-                '계속 진행 시 이용약관과\n개인정보처리방침에 동의하게 됩니다',
-                textAlign: TextAlign.center,
-                style: AppTextStyles.caption,
-              ),
-              const Spacer(flex: 2),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -231,6 +275,81 @@ class _GoogleButton extends StatelessWidget {
                   ),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+class _LoginBackgroundSlideshow extends StatefulWidget {
+  const _LoginBackgroundSlideshow();
+
+  @override
+  State<_LoginBackgroundSlideshow> createState() => _LoginBackgroundSlideshowState();
+}
+
+class _LoginBackgroundSlideshowState extends State<_LoginBackgroundSlideshow> {
+  // 낮→노을→밤 순서라 정렬 바꾸지 말 것.
+  static const List<String> _images = [
+    'assets/images/ongil_1.jpg',
+    'assets/images/ongil_2.jpg',
+    'assets/images/ongil_3.jpg',
+    'assets/images/ongil_4.jpg',
+    'assets/images/ongil_5.jpg',
+    'assets/images/ongil_6.jpg',
+    'assets/images/ongil_7.jpg',
+    'assets/images/ongil_8.jpg',
+    'assets/images/ongil_9.jpg',
+  ];
+
+  static const _holdDuration = Duration(seconds: 5);
+  static const _fadeDuration = Duration(milliseconds: 1200);
+
+  int _index = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(_holdDuration, (_) {
+      if (!mounted) return;
+      setState(() => _index = (_index + 1) % _images.length);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: _fadeDuration,
+      switchInCurve: Curves.easeInOut,
+      switchOutCurve: Curves.easeInOut,
+      layoutBuilder: (currentChild, previousChildren) => Stack(
+        fit: StackFit.expand,
+        children: [
+          ...previousChildren,
+          if (currentChild != null) currentChild,
+        ],
+      ),
+      child: Image.asset(
+        _images[_index],
+        key: ValueKey(_images[_index]),
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [AppColors.pastPhotoFrom, AppColors.pastPhotoTo],
+              ),
+            ),
+          );
+        },
       ),
     );
   }

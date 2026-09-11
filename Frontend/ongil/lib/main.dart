@@ -25,7 +25,7 @@ String _requireEnv(String key) {
   final value = dotenv.env[key];
   if (value == null || value.isEmpty) {
     throw StateError(
-      '.env 에 $key 가 없습니다. .env.example 을 .env 로 복사한 뒤 값을 채워주세요.',
+       '.env 에 $key 가 없습니다. .env.example 을 .env 로 복사한 뒤 값을 채워주세요.',
     );
   }
   return value;

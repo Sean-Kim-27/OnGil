@@ -4,6 +4,13 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:kakao_map_plugin/kakao_map_plugin.dart';
 
+/// 카카오 REST API 호출.
+///
+/// TODO(보안): REST 키가 `.env`에 있고, 그 파일이 에셋으로 APK에 통째로 들어간다.
+/// APK 압축만 풀면 키가 노출돼 쿼터 도용이 가능하다. 코드 난독화로는 못 막는다.
+/// 백엔드에 아래 프록시가 생기면 그쪽을 거치도록 바꾸고 키를 재발급할 것.
+///   GET /api/v1/kakao/search/keyword?query=&x=&y=&radius=
+///   GET /api/v1/kakao/directions?origin_lng=&origin_lat=&dest_lng=&dest_lat=
 class KakaoApiService {
   static String get _restApiKey => dotenv.env['KAKAO_REST_API_KEY'] ?? '';
 
@@ -69,7 +76,7 @@ class KakaoApiService {
       '?query=${Uri.encodeComponent(placeName)}'
       '&x=${latLng.longitude}&y=${latLng.latitude}&radius=100',
     );
-    
+
     try {
       final response = await http.get(
         url,

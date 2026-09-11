@@ -7,11 +7,14 @@ import '../controllers/app_shell_controller.dart';
 import '../models/guestbook.dart';
 import '../models/guestbook_entry.dart';
 import '../models/memory_archive_entry.dart';
+import '../models/moderation.dart';
 import '../models/schedule.dart';
 import '../services/auth_service.dart';
 import '../services/guestbook_api_service.dart';
+import '../services/moderation_api_service.dart';
 import '../services/photo_service.dart';
 import '../services/schedule_api_service.dart';
+import '../services/user_api_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_dimens.dart';
 import '../theme/app_text_styles.dart';
@@ -19,6 +22,8 @@ import '../theme/app_theme.dart';
 import '../widgets/before_after_slider.dart';
 import '../widgets/memory_photo.dart';
 import '../widgets/photo_source_sheet.dart';
+import '../widgets/report_sheet.dart';
+import 'blocked_users_screen.dart';
 
 /// 방명록 화면. '방명록'(글 목록) / '아카이브'(그때-지금 사진 비교) 두 탭.
 ///
@@ -63,6 +68,16 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
   List<GuestbookEntry> _entries = [];
   List<MemoryArchiveEntry> _archive = [];
 
+  /// 내 여정 장소에 달린 **모든 사용자**의 방명록. 방명록 탭이 이걸 보여준다.
+  /// (아카이브 탭과 작성 시트는 여전히 내 것만 담긴 `_books`를 쓴다)
+  List<GuestbookFeedItem> _feed = [];
+
+  /// 방명록 탭 상단에서 고른 장소. null이면 전체.
+  int? _selectedPlaceId;
+
+  /// 서버가 아는 내 user id. 내 글에는 신고 대신 수정·삭제를 띄운다.
+  int? _myUserId;
+
   /// 아카이브 탭에서 크게 비교 중인 장소.
   int? _featuredPlaceId;
 
@@ -97,6 +112,11 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
     final nickname = await AuthService.instance.getNickname();
     final scheduleId = await ScheduleApiService.getLastScheduleId();
 
+    // 내 글에는 신고 메뉴를 띄우지 않으려면 서버 기준 내 id가 필요하다.
+    // 실패해도 화면은 그대로 뜬다.
+    _myUserId =
+        UserApiService.currentUserId ?? (await UserApiService.fetchMe())?.id;
+
     ScheduleDetail? detail;
     String? scheduleError;
     if (scheduleId != null) {
@@ -120,9 +140,14 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
       bookError = '방명록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.';
     }
 
+    // 여정에 담긴 장소의 방명록을 모두 읽어온다(다른 사용자 글 포함).
+    final feed = await _fetchFeedForSchedule(detail);
+
     if (!mounted) return;
     setState(() {
       _schedule = detail;
+      _feed = feed;
+      _selectedPlaceId = null;
       _errorMessage = scheduleError;
       _guestbookError = bookError;
       _authorName = (nickname == null || nickname.isEmpty) ? '나' : nickname;
@@ -133,6 +158,87 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
       _featuredPlaceId = null;
       _rebuildViewModels();
     });
+  }
+
+  /// 내 여정에 담긴 장소의 방명록만 골라 방문 순서대로 정렬해 돌려준다.
+  ///
+  /// 서버 피드는 전체 장소를 주므로 여기서 여정 밖 장소를 걸러낸다.
+  /// 장소별로 묶어 보여주려면 전체를 받아야 해서 페이지를 이어 부른다.
+  Future<List<GuestbookFeedItem>> _fetchFeedForSchedule(
+    ScheduleDetail? detail,
+  ) async {
+    if (detail == null) return const [];
+
+    // place_id → 방문 순번
+    final sorted = [...detail.places]
+      ..sort(ScheduleDetail.compareByDayAndOrder);
+    final order = <int, int>{};
+    for (final p in sorted) {
+      if (p.hasPlaceId) order.putIfAbsent(p.placeId, () => order.length);
+    }
+    if (order.isEmpty) return const [];
+
+    final collected = <GuestbookFeedItem>[];
+    var offset = 0;
+    try {
+      // 300건은 무한 루프와 과도한 요청을 막는 상한.
+      while (collected.length < 300) {
+        final page =
+            await GuestbookApiService.fetchFeed(limit: 50, offset: offset);
+        // 서버 피드는 전체 장소를 주므로 내 여정에 담긴 장소만 남긴다.
+        // 그 외의 가공은 하지 않는다 — 서버가 내려준 건 그대로 보여준다.
+        collected.addAll(
+          page.items.where((e) => order.containsKey(e.place.id)),
+        );
+        if (!page.hasMore || page.items.isEmpty) break;
+        offset = page.nextOffset;
+      }
+    } catch (e) {
+      debugPrint('⚠️ [Guestbook] 피드 조회 실패: $e');
+      return collected;
+    }
+
+    collected.sort((a, b) {
+      final byPlace =
+          (order[a.place.id] ?? 1 << 30).compareTo(order[b.place.id] ?? 1 << 30);
+      if (byPlace != 0) return byPlace;
+      return b.createdAt.compareTo(a.createdAt);
+    });
+    return collected;
+  }
+
+  /// 작성·삭제 뒤 피드만 다시 읽는다. 실패해도 조용히 넘어간다.
+  Future<void> _reloadFeed() async {
+    final feed = await _fetchFeedForSchedule(_schedule);
+    if (!mounted) return;
+    setState(() => _feed = feed);
+  }
+
+  /// 지금 화면에 보여줄 방명록. 장소를 고르면 그 장소만.
+  List<GuestbookFeedItem> get _visibleFeed {
+    final id = _selectedPlaceId;
+    if (id == null) return _feed;
+    return _feed.where((e) => e.place.id == id).toList();
+  }
+
+  /// 장소별 방명록 개수. 상단 칩에 표시.
+  Map<int, int> get _feedCountByPlace {
+    final counts = <int, int>{};
+    for (final e in _feed) {
+      counts[e.place.id] = (counts[e.place.id] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  /// 이 방명록이 내 것인지.
+  ///
+  /// `_books`에는 내 방명록만 들어 있으므로, 같은 장소의 내 방명록 id와
+  /// 일치하면 그것만으로 확실하다. `/auth/me`가 실패해도 판별이 되도록
+  /// 이 경로를 먼저 본다.
+  bool _isMine(GuestbookFeedItem item) {
+    final mine = _books[item.placeId];
+    if (mine != null && mine.id == item.id) return true;
+    return _myUserId != null && item.author.id == _myUserId;
   }
 
   /// 서버 원본(`_books`)에서 두 탭이 쓸 화면용 모델을 다시 만든다.
@@ -281,6 +387,7 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
       }
 
       await _refreshPlace(placeId);
+      await _reloadFeed();
 
       if (!mounted) return;
       setState(() {
@@ -308,22 +415,28 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
     } catch (_) {}
   }
 
-  /// 글만 지움. 서버에 사진 삭제 엔드포인트가 없어 사진은 그대로 남는다.
-  Future<void> _confirmDeleteEntry(GuestbookEntry entry) async {
-    final book = _books[entry.placeId];
-    final hasPhotos = book?.photos.isNotEmpty ?? false;
+  /// 방명록을 통째로 지운다. 서버가 딸린 사진 레코드까지 함께 삭제한다.
+  ///
+  /// 삭제 키가 place_id가 아니라 guestbook_id라 둘 다 받는다.
+  /// (place_id는 지운 뒤 그 장소만 다시 읽는 데 쓴다)
+  Future<void> _confirmDeleteGuestbook({
+    required int guestbookId,
+    required int placeId,
+  }) async {
+    final hasPhotos = _books[placeId]?.photos.isNotEmpty ?? false;
 
     final ok = await _confirm(
       hasPhotos
-          ? '이 방명록 글을 지울까요?\n올린 사진은 아카이브에 그대로 남아요.'
+          ? '이 방명록을 지울까요?\n올린 사진도 함께 삭제돼요.'
           : '이 방명록을 지울까요?',
     );
     if (!ok || !mounted) return;
 
     setState(() => _isSaving = true);
     try {
-      await GuestbookApiService.saveContent(entry.placeId, null);
-      await _refreshPlace(entry.placeId);
+      await GuestbookApiService.deleteGuestbook(guestbookId);
+      await _refreshPlace(placeId);
+      await _reloadFeed();
     } on GuestbookApiException catch (e) {
       if (mounted) _toast(e.userMessage);
     } catch (_) {
@@ -333,7 +446,64 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
     }
   }
 
-  Future<bool> _confirm(String message) async {
+  // ---------------------------------------------------------------------------
+  // 신고 / 차단
+  // ---------------------------------------------------------------------------
+
+  /// 남의 글에서 뜨는 메뉴. 공개되는 사용자 생성 콘텐츠라 Play 정책상 필요하다.
+  Future<void> _openModerationMenu(GuestbookFeedItem item) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ModerationSheet(authorName: item.author.displayName),
+    );
+    if (action == null || !mounted) return;
+
+    if (action == 'report') {
+      final reported = await ReportSheet.show(
+        context,
+        guestbookId: item.id,
+        authorName: item.author.displayName,
+      );
+      if (reported == true) _toast('신고가 접수됐어요. 운영자가 확인 후 조치합니다.');
+    } else if (action == 'block') {
+      await _confirmBlock(item);
+    }
+  }
+
+  Future<void> _confirmBlock(GuestbookFeedItem item) async {
+    final name = item.author.displayName;
+    final ok = await _confirm(
+      '$name님을 차단할까요?\n이 사용자의 방명록이 더 이상 보이지 않아요.',
+      confirmLabel: '차단',
+    );
+    if (!ok || !mounted) return;
+
+    setState(() => _isSaving = true);
+    try {
+      await ModerationApiService.blockUser(item.author.id);
+      if (!mounted) return;
+      // 서버도 다음 요청부터 걸러주지만 기다리지 않고 화면에서 먼저 지운다.
+      setState(() => _feed.removeWhere((e) => e.author.id == item.author.id));
+      _toast('$name님을 차단했어요.');
+    } on ModerationApiException catch (e) {
+      if (mounted) _toast(e.userMessage);
+    } catch (_) {
+      if (mounted) _toast('차단하지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _openBlockedUsers() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const BlockedUsersScreen()),
+    );
+    // 차단을 풀고 돌아오면 그 사람 글이 다시 보여야 한다.
+    if (mounted) _reloadFeed();
+  }
+
+  Future<bool> _confirm(String message, {String confirmLabel = '삭제'}) async {
     final result = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -349,9 +519,10 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text(
-              '삭제',
-              style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700),
+            child: Text(
+              confirmLabel,
+              style: const TextStyle(
+                  color: AppColors.accent, fontWeight: FontWeight.w700),
             ),
           ),
         ],
@@ -442,6 +613,7 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
                 onAddTap: () => _openCompose(
                   mode: _tabIndex == 0 ? _ComposeMode.guestbook : _ComposeMode.archive,
                 ),
+                onBlockedTap: _openBlockedUsers,
               ),
               _GuestbookTabs(
                 index: _tabIndex,
@@ -467,7 +639,7 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
 
     // 여정이 없어도 지난 방명록이 있으면 글 목록은 보여준다.
     if (schedule == null) {
-      if (_tabIndex == 0 && _entries.isNotEmpty) return _buildGuestbookList();
+      if (_tabIndex == 0 && _entries.isNotEmpty) return _buildMyEntriesList();
       return _EmptyStateCard(
         icon: _errorMessage == null ? Icons.map_outlined : Icons.cloud_off_outlined,
         title: _errorMessage == null ? '아직 만든 여정이 없어요' : '여정을 불러오지 못했어요',
@@ -498,20 +670,8 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
     );
   }
 
-  Widget _buildGuestbookTab(ScheduleDetail schedule) {
-    if (_entries.isEmpty) {
-      return _EmptyStateCard(
-        icon: Icons.edit_note_outlined,
-        title: '아직 남긴 기억이 없어요',
-        subtitle: '${schedule.title}에 담긴 장소를 골라\n그날의 기억과 사진을 남겨보세요',
-        actionLabel: '첫 기억 남기기',
-        onAction: () => _openCompose(mode: _ComposeMode.guestbook),
-      );
-    }
-    return _buildGuestbookList();
-  }
-
-  Widget _buildGuestbookList() {
+  /// 여정을 못 불러왔을 때의 폴백. 장소 필터를 만들 수 없어 내 글만 보여준다.
+  Widget _buildMyEntriesList() {
     return RefreshIndicator(
       color: AppColors.accent,
       onRefresh: _load,
@@ -530,10 +690,108 @@ class _GuestbookScreenState extends State<GuestbookScreen> {
             mode: _ComposeMode.guestbook,
             placeId: _entries[i].placeId,
           ),
-          onDelete: () => _confirmDeleteEntry(_entries[i]),
+          onDelete: () => _confirmDeleteGuestbook(
+            guestbookId: _entries[i].guestbookId,
+            placeId: _entries[i].placeId,
+          ),
         ),
       ),
     );
+  }
+
+  Widget _buildGuestbookTab(ScheduleDetail schedule) {
+    final options = _placeOptions(schedule);
+    final visible = _visibleFeed;
+
+    return Column(
+      children: [
+        if (options.isNotEmpty)
+          _PlaceFilterBar(
+            options: options,
+            counts: _feedCountByPlace,
+            totalCount: _feed.length,
+            selectedPlaceId: _selectedPlaceId,
+            onChanged: (id) => setState(() => _selectedPlaceId = id),
+          ),
+        Expanded(
+          child: visible.isEmpty
+              ? _buildFeedEmptyState(schedule)
+              : _buildFeedList(visible),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFeedEmptyState(ScheduleDetail schedule) {
+    final placeId = _selectedPlaceId;
+
+    if (placeId != null) {
+      final name = _placeNameOf(schedule, placeId);
+      return _EmptyStateCard(
+        icon: Icons.edit_note_outlined,
+        title: '$name에 남긴 기억이 아직 없어요',
+        subtitle: '이곳에서의 기억과 사진을\n첫 번째로 남겨보세요',
+        actionLabel: '이 장소에 남기기',
+        onAction: () =>
+            _openCompose(mode: _ComposeMode.guestbook, placeId: placeId),
+      );
+    }
+
+    return _EmptyStateCard(
+      icon: Icons.edit_note_outlined,
+      title: '아직 남긴 기억이 없어요',
+      subtitle: '${schedule.title}에 담긴 장소를 골라\n그날의 기억과 사진을 남겨보세요',
+      actionLabel: '첫 기억 남기기',
+      onAction: () => _openCompose(mode: _ComposeMode.guestbook),
+    );
+  }
+
+  Widget _buildFeedList(List<GuestbookFeedItem> items) {
+    return RefreshIndicator(
+      color: AppColors.accent,
+      onRefresh: _load,
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.screenHorizontal,
+          10,
+          AppSpacing.screenHorizontal,
+          100,
+        ),
+        itemCount: items.length,
+        separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.cardGap),
+        itemBuilder: (context, i) {
+          final item = items[i];
+          final mine = _isMine(item);
+          return _FeedEntryCard(
+            item: item,
+            isMine: mine,
+            // 장소를 이미 골라놨으면 카드마다 같은 장소 태그가 반복돼 지저분하다.
+            showPlaceTag: _selectedPlaceId == null,
+            onEdit: mine
+                ? () => _openCompose(
+                      mode: _ComposeMode.guestbook,
+                      placeId: item.placeId,
+                    )
+                : null,
+            onDelete: mine
+                ? () => _confirmDeleteGuestbook(
+                      guestbookId: item.id,
+                      placeId: item.placeId,
+                    )
+                : null,
+            onModerate: mine ? null : () => _openModerationMenu(item),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 여정에서 place_id로 장소 이름을 찾는다.
+  String _placeNameOf(ScheduleDetail schedule, int placeId) {
+    for (final p in schedule.places) {
+      if (p.placeId == placeId && p.title.isNotEmpty) return p.title;
+    }
+    return '이 장소';
   }
 
   Widget _buildArchiveTab(ScheduleDetail schedule) {
@@ -1161,14 +1419,12 @@ class _FieldLabel extends StatelessWidget {
 class _SelectChip extends StatelessWidget {
   final String label;
   final bool selected;
-  final IconData? icon;
   final VoidCallback onTap;
 
   const _SelectChip({
     required this.label,
     required this.selected,
     required this.onTap,
-    this.icon,
   });
 
   @override
@@ -1185,14 +1441,6 @@ class _SelectChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (icon != null) ...[
-              Icon(
-                icon,
-                size: 13,
-                color: selected ? AppColors.accent : AppColors.textSecondary,
-              ),
-              const SizedBox(width: 4),
-            ],
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 180),
               child: Text(
@@ -1485,12 +1733,19 @@ class _SinglePhotoCard extends StatelessWidget {
   }
 }
 
-/// 화면 상단 - 타이틀 + 새 글 작성 버튼.
+/// 화면 상단 - 타이틀 + 차단 목록 / 새 글 작성 버튼.
 class _GuestbookTopBar extends StatelessWidget {
   final VoidCallback onAddTap;
   final String addLabel;
 
-  const _GuestbookTopBar({required this.onAddTap, required this.addLabel});
+  /// 차단한 사용자 관리 화면으로 이동.
+  final VoidCallback onBlockedTap;
+
+  const _GuestbookTopBar({
+    required this.onAddTap,
+    required this.addLabel,
+    required this.onBlockedTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1505,21 +1760,45 @@ class _GuestbookTopBar extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text('방명록', style: AppTextStyles.heroGreeting),
-          Tooltip(
-            message: addLabel,
-            child: GestureDetector(
-              onTap: onAddTap,
-              child: Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: AppColors.accent,
-                  shape: BoxShape.circle,
-                  boxShadow: AppShadows.fab,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Tooltip(
+                message: '차단한 사용자',
+                child: GestureDetector(
+                  onTap: onBlockedTap,
+                  child: Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: AppColors.cardBackground,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppColors.line),
+                    ),
+                    child: const Icon(Icons.block,
+                        color: AppColors.text, size: 18),
+                  ),
                 ),
-                child: const Icon(Icons.add, color: AppColors.cardBackground, size: 20),
               ),
-            ),
+              const SizedBox(width: 8),
+              Tooltip(
+                message: addLabel,
+                child: GestureDetector(
+                  onTap: onAddTap,
+                  child: Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: AppColors.accent,
+                      shape: BoxShape.circle,
+                      boxShadow: AppShadows.fab,
+                    ),
+                    child: const Icon(Icons.add,
+                        color: AppColors.cardBackground, size: 20),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1650,6 +1929,313 @@ class _EmptyStateCard extends StatelessWidget {
               ),
               child: Text(actionLabel, style: AppTextStyles.button),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 방명록 탭 상단의 장소 선택 줄.
+///
+/// 여정에 담긴 장소를 방문 순서대로 늘어놓고, 고른 장소의 방명록만 보여준다.
+class _PlaceFilterBar extends StatelessWidget {
+  final List<_PlaceOption> options;
+  final Map<int, int> counts;
+  final int totalCount;
+  final int? selectedPlaceId;
+  final ValueChanged<int?> onChanged;
+
+  const _PlaceFilterBar({
+    required this.options,
+    required this.counts,
+    required this.totalCount,
+    required this.selectedPlaceId,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.screenHorizontal,
+          vertical: 4,
+        ),
+        children: [
+          _FilterChip(
+            label: '전체',
+            count: totalCount,
+            selected: selectedPlaceId == null,
+            onTap: () => onChanged(null),
+          ),
+          for (final o in options) ...[
+            const SizedBox(width: 7),
+            _FilterChip(
+              label: o.name,
+              count: counts[o.placeId] ?? 0,
+              selected: selectedPlaceId == o.placeId,
+              onTap: () => onChanged(o.placeId),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  final String label;
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _FilterChip({
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.accent : AppColors.cardBackground,
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          border: Border.all(
+            color: selected ? AppColors.accent : AppColors.line,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 130),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTextStyles.caption.copyWith(
+                  color: selected
+                      ? AppColors.cardBackground
+                      : AppColors.textSecondary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            if (count > 0) ...[
+              const SizedBox(width: 5),
+              Text(
+                '$count',
+                style: AppTextStyles.caption.copyWith(
+                  color: selected
+                      ? AppColors.cardBackground.withValues(alpha: 0.85)
+                      : AppColors.brandMuted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 방명록 카드. 내 글이면 수정·삭제, 남의 글이면 신고·차단 메뉴가 붙는다.
+class _FeedEntryCard extends StatelessWidget {
+  final GuestbookFeedItem item;
+  final bool isMine;
+  final bool showPlaceTag;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
+  final VoidCallback? onModerate;
+
+  const _FeedEntryCard({
+    required this.item,
+    required this.isMine,
+    required this.showPlaceTag,
+    this.onEdit,
+    this.onDelete,
+    this.onModerate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final photo = item.coverPhoto;
+
+    return GestureDetector(
+      onLongPress: onEdit,
+      child: Container(
+        padding: const EdgeInsets.all(AppSpacing.cardPaddingLarge),
+        decoration: BoxDecoration(
+          color: AppColors.cardBackground,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(color: AppColors.line),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                _AuthorAvatar(name: item.author.displayName),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          item.author.displayName,
+                          style: AppTextStyles.cardTitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (isMine) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.accentLight,
+                            borderRadius:
+                                BorderRadius.circular(AppRadius.pill),
+                          ),
+                          child: Text(
+                            '내 글',
+                            style: AppTextStyles.caption.copyWith(
+                              color: AppColors.accent,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                Text(_relativeDate(item.createdAt),
+                    style: AppTextStyles.caption),
+                if (isMine && onEdit != null && onDelete != null)
+                  _EntryMenuButton(onEdit: onEdit!, onDelete: onDelete!)
+                else if (onModerate != null)
+                  IconButton(
+                    tooltip: '신고 / 차단',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 34),
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.more_horiz,
+                        size: 18, color: AppColors.textSecondary),
+                    onPressed: onModerate,
+                  ),
+              ],
+            ),
+            if (photo != null) ...[
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(AppRadius.thumbnail),
+                child: Image.network(
+                  photo.displayUrl,
+                  width: double.infinity,
+                  height: 170,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    height: 170,
+                    alignment: Alignment.center,
+                    color: AppColors.background,
+                    child: const Text('사진을 열 수 없어요',
+                        style: AppTextStyles.bodySmall),
+                  ),
+                ),
+              ),
+            ],
+            if (item.hasContent) ...[
+              const SizedBox(height: 10),
+              Text(
+                item.content!,
+                style: AppTextStyles.body,
+                maxLines: 6,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+            if (showPlaceTag) ...[
+              const SizedBox(height: 10),
+              _PlaceTag(label: item.place.name),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// GuestbookEntry의 relativeDate와 같은 규칙.
+  String _relativeDate(DateTime at) {
+    final diff = DateTime.now().difference(at);
+    if (diff.inMinutes < 1) return '방금';
+    if (diff.inHours < 1) return '${diff.inMinutes}분 전';
+    if (diff.inDays < 1) return '${diff.inHours}시간 전';
+    if (diff.inDays < 7) return '${diff.inDays}일 전';
+    return '${at.year}.${at.month.toString().padLeft(2, '0')}.'
+        '${at.day.toString().padLeft(2, '0')}';
+  }
+}
+
+/// 남의 글 ⋯ 메뉴 - 신고 / 차단.
+class _ModerationSheet extends StatelessWidget {
+  final String authorName;
+  const _ModerationSheet({required this.authorName});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.background,
+        borderRadius:
+            BorderRadius.vertical(top: Radius.circular(AppRadius.cardHero)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 38,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.line,
+                borderRadius: BorderRadius.circular(AppRadius.pill),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.cardGap),
+            ListTile(
+              leading: const Icon(Icons.flag_outlined,
+                  size: 20, color: AppColors.text),
+              title: const Text('신고하기', style: AppTextStyles.body),
+              subtitle: Text(
+                '부적절한 내용을 운영자에게 알립니다',
+                style: AppTextStyles.caption
+                    .copyWith(color: AppColors.textSecondary),
+              ),
+              onTap: () => Navigator.of(context).pop('report'),
+            ),
+            ListTile(
+              leading:
+                  const Icon(Icons.block, size: 20, color: AppColors.text),
+              title: Text('$authorName님 차단하기', style: AppTextStyles.body),
+              subtitle: Text(
+                '이 사용자의 방명록이 보이지 않게 됩니다',
+                style: AppTextStyles.caption
+                    .copyWith(color: AppColors.textSecondary),
+              ),
+              onTap: () => Navigator.of(context).pop('block'),
+            ),
+            const SizedBox(height: AppSpacing.cardGap),
           ],
         ),
       ),

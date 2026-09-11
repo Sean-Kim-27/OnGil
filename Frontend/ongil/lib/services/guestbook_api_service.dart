@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/guestbook.dart';
+import '../models/moderation.dart';
 import 'api_config.dart';
 import 'auth_service.dart';
 
@@ -215,13 +216,52 @@ class GuestbookApiService {
     }
   }
 
+  /// GET /api/v1/guestbooks/feed — 차단한 사용자를 제외한 전체 피드
+  ///
+  /// `fetchMyGuestbooks`와 달리 **다른 사용자의 방명록도** 온다.
+  /// 응답에 작성자(author)와 장소(place)가 함께 실려 있어서,
+  /// 이번 여정 밖 장소도 이름을 제대로 보여줄 수 있다.
+  static Future<GuestbookFeedPage> fetchFeed({
+    int limit = 20,
+    int offset = 0,
+  }) {
+    final url = ApiConfig.uri('/guestbooks/feed', {
+      'limit': limit.clamp(1, 100),
+      'offset': offset < 0 ? 0 : offset,
+    });
+
+    return _send(
+      'fetchFeed',
+      () => AuthService.instance.authorizedGet(url),
+      (res) => GuestbookFeedPage.fromJson(_asObject('fetchFeed', res)),
+    );
+  }
+
+  /// GET /api/v1/guestbooks/{guestbook_id} — 피드 단건 (차단 사용자 제외)
+  ///
+  /// 차단했거나 삭제된 글이면 404가 오므로 null로 돌려준다.
+  static Future<GuestbookFeedItem?> fetchFeedItem(int guestbookId) async {
+    final url = ApiConfig.uri('/guestbooks/$guestbookId');
+    try {
+      return await _send(
+        'fetchFeedItem',
+        () => AuthService.instance.authorizedGet(url),
+        (res) => GuestbookFeedItem.fromJson(_asObject('fetchFeedItem', res)),
+      );
+    } on GuestbookApiException catch (e) {
+      if (e.kind == GuestbookApiErrorKind.notFound) return null;
+      rethrow;
+    }
+  }
+
   // -------------------------------------------------------------------------
   // 작성 / 수정
   // -------------------------------------------------------------------------
 
   /// PUT /api/v1/guestbooks/places/{place_id} — 텍스트 작성·수정
   ///
-  /// [content]가 null이면 글만 지운다(사진은 서버에 그대로 남음).
+  /// [content]가 null이면 글만 비운다. 방명록 자체를 없애려면
+  /// [deleteGuestbook]을 쓸 것.
   /// 서버 제약이 100자라 넘치면 요청 전에 잘라 보냄.
   static Future<Guestbook> saveContent(int placeId, String? content) {
     final url = Uri.parse('$_baseUrl/guestbooks/places/$placeId');
@@ -241,6 +281,35 @@ class GuestbookApiService {
       (res) => Guestbook.fromJson(_asObject('saveContent', res)),
     );
   }
+
+  // -------------------------------------------------------------------------
+  // 삭제
+  // -------------------------------------------------------------------------
+
+  /// DELETE /api/v1/guestbooks/{guestbook_id} — 내 방명록 삭제
+  ///
+  /// 연결된 사진 레코드까지 함께 지운다(사진 원본 파일과 신고 기록은 서버가 보존).
+  /// 작성자 본인만 지울 수 있고, 남의 것이거나 이미 없으면 404가 온다.
+  /// 이미 지워진 걸 또 지우는 건 사용자 입장에선 성공이라 404는 삼킨다.
+  static Future<void> deleteGuestbook(int guestbookId) async {
+    final url = ApiConfig.uri('/guestbooks/$guestbookId');
+    debugPrint('📤 [deleteGuestbook] DELETE $url');
+
+    try {
+      await _send(
+        'deleteGuestbook',
+        () => AuthService.instance.authorizedDelete(url),
+        (_) {},
+      );
+    } on GuestbookApiException catch (e) {
+      if (e.kind == GuestbookApiErrorKind.notFound) return;
+      rethrow;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 사진
+  // -------------------------------------------------------------------------
 
   /// POST /api/v1/guestbooks/places/{place_id}/photos — 사진 업로드(멀티파트)
   ///

@@ -49,3 +49,9 @@ app.*.map.json
 !.env.example
 *.zip
 **/build/
+
+# ===== º¸¾È =====
+*.jks
+*.keystore
+key.properties
+google-services.json

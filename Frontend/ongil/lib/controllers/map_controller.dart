@@ -267,6 +267,9 @@ class MapController extends ChangeNotifier {
   }
 
   /// 추천 장소를 못 얻었을 때의 폴백 — 카메라만 이동.
+  ///
+  /// TODO: 카카오 REST 키가 앱 바이너리(.env 에셋)에 그대로 들어간다.
+  /// 백엔드에 프록시 엔드포인트가 생기면 그쪽을 거치도록 바꿀 것.
   Future<bool> _searchWithKakao(String keyword) async {
     final url = Uri.parse(
       'https://dapi.kakao.com/v2/local/search/keyword.json?query=${Uri.encodeComponent(keyword)}',
@@ -312,6 +315,7 @@ class MapController extends ChangeNotifier {
         }
       } else {
         debugPrint('검색 실패 코드: ${response.statusCode}');
+        debugPrint('응답: ${response.body}');
       }
     } catch (e) {
       debugPrint('위치 검색 오류: $e');

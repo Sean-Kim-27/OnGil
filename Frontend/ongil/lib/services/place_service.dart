@@ -4,7 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'api_config.dart';
 import 'auth_service.dart';
-import 'package:flutter/foundation.dart';
+
 const Map<String, String> _categoryLabelMap = {
   'restaurant': '음식',
   'cafe': '카페',
