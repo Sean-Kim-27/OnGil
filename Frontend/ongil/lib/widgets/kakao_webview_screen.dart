@@ -30,15 +30,33 @@ class _KakaoWebViewScreenState extends State<KakaoWebViewScreen> {
       ..setBackgroundColor(AppColors.background)
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageStarted: (_) => setState(() {
-            _isLoading = true;
-            _hasError = false;
-          }),
-          onPageFinished: (_) => setState(() => _isLoading = false),
-          onWebResourceError: (_) => setState(() {
-            _isLoading = false;
-            _hasError = true;
-          }),
+          // kakaomap://, intent://, market:// 등 앱 실행용 스킴은 웹뷰가 처리할 수 없어
+          // ERR_UNKNOWN_URL_SCHEME 오류 페이지가 노출된다. http/https만 통과시킨다.
+          onNavigationRequest: (request) {
+            final scheme = Uri.tryParse(request.url)?.scheme ?? '';
+            if (scheme != 'http' && scheme != 'https') {
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
+          onPageStarted: (_) {
+            if (!mounted) return;
+            setState(() {
+              _isLoading = true;
+              _hasError = false;
+            });
+          },
+          onPageFinished: (_) {
+            if (!mounted) return;
+            setState(() => _isLoading = false);
+          },
+          onWebResourceError: (_) {
+            if (!mounted) return;
+            setState(() {
+              _isLoading = false;
+              _hasError = true;
+            });
+          },
         ),
       )
       ..loadRequest(Uri.parse(widget.url));
@@ -151,30 +169,16 @@ Future<void> _showKakaoNotFoundDialog(BuildContext context, String title) {
     builder: (context) => AlertDialog(
       backgroundColor: AppColors.cardBackground,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.cardLarge)),
-      title: const Text('카카오맵에 없는 장소예요', style: AppTextStyles.screenTitle),
+      title: const Text('상세 정보가 없는 장소예요', style: AppTextStyles.screenTitle),
       content: Text(
-        "'$title'은(는) 카카오맵에서 상세 페이지를 찾을 수 없어요. 카카오맵에서 직접 검색해보시겠어요?",
+        "'$title'은(는) 연결된 상세 페이지가 없어요. 목록에 표시된 주소와 일정 정보로 확인해주세요.",
         style: AppTextStyles.body,
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('닫기', style: TextStyle(color: AppColors.textSecondary)),
-        ),
-        TextButton(
-          onPressed: () {
-            Navigator.pop(context);
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => KakaoWebViewScreen(
-                  title: '카카오맵 검색',
-                  url: 'https://map.kakao.com/?q=${Uri.encodeComponent(title)}',
-                ),
-              ),
-            );
-          },
           child: const Text(
-            '카카오맵에서 검색',
+            '확인',
             style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700),
           ),
         ),
